@@ -1,0 +1,37 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="280" y1="70" x2="1660" y2="980" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#191E45"/>
+      <stop offset="0.48" stop-color="#131735"/>
+      <stop offset="1" stop-color="#0A0D1F"/>
+    </linearGradient>
+    <radialGradient id="leftGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(430 340) rotate(22) scale(560 420)">
+      <stop stop-color="#8E63FF" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#8E63FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bottomGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1280 860) rotate(-4) scale(680 280)">
+      <stop stop-color="#7D5CFF" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#7D5CFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softBlur" x="0" y="0" width="1920" height="1080" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.2"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#leftGlow)"/>
+  <rect width="1920" height="1080" fill="url(#bottomGlow)"/>
+
+  <g opacity="0.2" filter="url(#softBlur)">
+    <path d="M50 110 C330 240, 560 460, 880 630" stroke="#8F73FF" stroke-width="8"/>
+    <path d="M10 190 C300 320, 580 540, 930 730" stroke="#9C88FF" stroke-width="6"/>
+    <path d="M20 305 C310 425, 620 640, 980 820" stroke="#A893FF" stroke-width="4"/>
+  </g>
+
+  <g opacity="0.12">
+    <path d="M0 720 H1920" stroke="#9BA9FF"/>
+    <path d="M0 760 H1920" stroke="#9BA9FF"/>
+    <path d="M0 800 H1920" stroke="#9BA9FF"/>
+    <path d="M0 840 H1920" stroke="#9BA9FF"/>
+  </g>
+</svg>
