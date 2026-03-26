@@ -1,0 +1,31 @@
+{
+  "name": "supabase-server",
+  "version": "1.0.0",
+  "description": "ElevateTrust AI — Express API backed by Supabase (Postgres + Auth)",
+  "license": "ISC",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js",
+    "migrate:run": "node scripts/migrate-mongo-to-supabase.js",
+    "migrate:validate": "node scripts/validate-migration.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4",
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.8.0",
+    "joi": "^17.13.3",
+    "nodemailer": "^8.0.2",
+    "nodemon": "^3.1.10"
+  },
+  "devDependencies": {
+    "mongoose": "^8.13.2"
+  }
+}
