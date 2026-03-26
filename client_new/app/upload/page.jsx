@@ -63,12 +63,7 @@ function VerdictReport({ videoResult, imageResult }) {
 
       {/* ── Big verdict banner ── */}
       <div
-        style={{
-          display: "flex", alignItems: "flex-start", gap: 20,
-          padding: "24px 28px", borderRadius: 16, marginBottom: 20,
-          background: isFake ? "rgba(254,242,242,0.9)" : "rgba(240,253,244,0.9)",
-          border: `1px solid ${isFake ? "rgba(239,68,68,0.25)" : "rgba(34,197,94,0.25)"}`,
-        }}
+        className={`verdict-banner ${isFake ? "is-fake" : "is-real"}`}
       >
         <div style={{ fontSize: 40, marginTop: 2 }}>
           {isFake ? "⚠️" : "✅"}
@@ -184,7 +179,7 @@ function VerdictReport({ videoResult, imageResult }) {
                 </h4>
               </div>
               
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 32, alignItems: "center", marginBottom: 24 }}>
+              <div className="audio-summary-grid">
                 <div>
                   <p style={{ fontSize: "0.85rem", fontWeight: 600, color: "#666", marginBottom: 6 }}>Probabilistic Verdict</p>
                   <p style={{ 
@@ -198,7 +193,7 @@ function VerdictReport({ videoResult, imageResult }) {
                   </p>
                 </div>
                 
-                <div style={{ textAlign: "center" }}>
+                <div className="audio-confidence-wrap">
                   <div style={{
                     width: "110px", height: "110px", borderRadius: "50%",
                     background: `conic-gradient(${videoResult.audio_analysis.prediction?.includes("Fake") ? "#ef4444" : "#22c55e"} ${(videoResult.audio_analysis.prediction?.includes("Fake") ? videoResult.audio_analysis.overall_score : 100 - (videoResult.audio_analysis.overall_score || 0)) * 3.6}deg, #f3f4f6 0deg)`,
@@ -218,7 +213,7 @@ function VerdictReport({ videoResult, imageResult }) {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+              <div className="audio-metrics-grid">
                 <div style={{ padding: "16px", background: "#f9fafb", borderRadius: "14px", border: "1px solid #efefef", textAlign: "center" }}>
                   <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888", textTransform: "uppercase", marginBottom: 4 }}>Total Segments</div>
                   <div style={{ fontSize: "1.6rem", fontWeight: 700, color: "#111" }}>{videoResult.audio_analysis.total_segments || 0}</div>
@@ -641,10 +636,10 @@ function UploadContent() {
         </div>
 
         {/* Upload controls + live preview side-by-side */}
-        <div style={{ display: "grid", gridTemplateColumns: localPreviewUrl ? "1fr 1fr" : "1fr 1fr", gap: 24, marginBottom: 24 }}>
+        <div className="upload-top-grid">
 
           {/* Left — controls */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <section className="upload-left-stack">
             {/* Media Upload */}
             <div className="glass-card">
               <h3 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: "1rem", fontWeight: 600 }}>
@@ -707,8 +702,8 @@ function UploadContent() {
 
           {/* Right — media preview */}
           {(localPreviewUrl || urlEmbedId) && (
-            <section>
-              <div className="glass-card" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+            <section className="upload-preview-section">
+              <div className="glass-card upload-preview-card">
                 <h3 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, fontSize: "1rem", fontWeight: 600 }}>
                   <FiPlay /> Preview
                 </h3>
@@ -718,13 +713,7 @@ function UploadContent() {
                     ref={localVideoRef}
                     src={localPreviewUrl}
                     controls
-                    style={{
-                      width: "100%",
-                      borderRadius: 10,
-                      background: "#000",
-                      maxHeight: 320,
-                      objectFit: "contain",
-                    }}
+                    className="upload-preview-media upload-preview-video"
                   />
                 ) : previewType === 'url' && urlEmbedId ? (
                   <iframe
@@ -732,12 +721,7 @@ function UploadContent() {
                     title="Video Preview"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
-                    style={{
-                      width: "100%",
-                      height: 280,
-                      borderRadius: 10,
-                      border: "none",
-                    }}
+                    className="upload-preview-media upload-preview-iframe"
                   />
                 ) : previewType === 'url' ? (
                   <div style={{
@@ -753,27 +737,18 @@ function UploadContent() {
                   <img
                     src={localPreviewUrl}
                     alt="Preview"
-                    style={{
-                      width: "100%",
-                      borderRadius: 10,
-                      maxHeight: 320,
-                      objectFit: "contain",
-                      background: "#f4f4f4",
-                    }}
+                    className="upload-preview-media upload-preview-image"
                   />
                 )}
 
                 {(fileName || videoUrl) && (
-                  <p style={{ marginTop: 10, fontSize: "0.8rem", color: "#888", wordBreak: "break-all" }}>
+                  <p className="upload-preview-filename">
                     {fileName || videoUrl}
                   </p>
                 )}
 
                 {(uploading || processing) && (
-                  <div style={{
-                    marginTop: 12, height: 4, background: "rgba(0,0,0,0.08)",
-                    borderRadius: 100, overflow: "hidden",
-                  }}>
+                  <div className="upload-progress-track">
                     <div style={{
                       height: "100%", width: `${progress}%`,
                       background: "linear-gradient(to right, #6366f1, #8b5cf6)",

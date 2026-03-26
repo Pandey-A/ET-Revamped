@@ -58,14 +58,14 @@ const Hero = () => {
 
       {/* Animated Content */}
       <motion.div
-        className="relative z-10 mx-auto flex max-w-[1000px] flex-col items-center text-center gap-8 px-6 pt-[180px] pb-[80px]"
+        className="relative z-10 mx-auto flex w-full max-w-[1360px] flex-col items-center text-center gap-8 px-4 sm:px-6 lg:px-10 pt-[150px] md:pt-[170px] pb-[72px]"
         variants={containerVariants}
         initial="hidden"
         animate="visible"
       >
         <motion.h1
           className="text-left md:text-center font-sans leading-[1.1] tracking-[-0.04em] text-[#1a1a1a]"
-          style={{ fontSize: "clamp(48px, 6vw, 84px)", fontWeight: 400, marginBottom: 24 }}
+          style={{ fontSize: "clamp(34px, 6vw, 84px)", fontWeight: 400, marginBottom: 20 }}
           variants={itemVariants}
         >
           Upload to Uncover <br />
@@ -76,8 +76,8 @@ const Hero = () => {
         </motion.h1>
 
         <motion.p
-          className="max-w-[554px] text-left md:text-center font-sans font-light text-base text-[#666] md:text-lg"
-          style={{ lineHeight: 1.6, marginBottom: 40 }}
+          className="max-w-[680px] text-left md:text-center font-sans font-light text-[15px] text-[#666] md:text-lg"
+          style={{ lineHeight: 1.6, marginBottom: 28 }}
           variants={itemVariants}
         >
           Discover an advanced AI-assisted verifier that detects facial
@@ -85,7 +85,7 @@ const Hero = () => {
         </motion.p>
 
         <motion.div
-          className="flex w-full max-w-[520px] flex-col items-center gap-4"
+          className="flex w-full max-w-[700px] flex-col items-center gap-4"
           variants={itemVariants}
         >
           {/* CTA Pill */}
@@ -123,7 +123,7 @@ const Hero = () => {
           </div>
 
           {/* Social Proof */}
-          <div className="flex items-center gap-3 text-sm text-[#444]">
+          <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-[#444]">
             <span style={{ letterSpacing: 2, color: "#000" }}>★★★★★</span>
             <span>Trusted by 200+ security researchers</span>
           </div>

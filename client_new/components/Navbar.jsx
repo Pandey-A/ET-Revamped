@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { useAuth } from "@/context/AuthContext";
 
 const Navbar = () => {
@@ -47,7 +46,7 @@ const Navbar = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [mobileOpen]);
 
-  const authRight = () => {
+  const authRight = (mobileMenu = false) => {
     if (isLoading) return <div className="text-sm font-light text-black">...</div>;
 
     if (!isAuthenticated) {
@@ -55,7 +54,7 @@ const Navbar = () => {
         <div className="flex items-center gap-4">
           <Link
             href="/register"
-            className="hidden text-sm font-light border border-black rounded-full px-5 py-2.5 text-black transition-colors hover:opacity-70 sm:block"
+            className={`${mobileMenu ? "block" : "hidden sm:block"} text-sm font-light border border-black rounded-full px-5 py-2.5 text-black transition-colors hover:opacity-70`}
           >
             Sign up
           </Link>
@@ -85,8 +84,8 @@ const Navbar = () => {
   const closeMobile = () => setMobileOpen(false);
 
   return (
-    <header className={`fixed left-0 right-0 top-0 z-50 px-6 transition-all duration-300 ${scrolled ? 'pt-2' : 'pt-6'}`}>
-      <nav className="mx-auto flex max-w-6xl items-center justify-between rounded-full border border-white/60 bg-white/70 px-6 py-3 shadow-[0px_4px_24px_0px_rgba(0,0,0,0.04)] backdrop-blur-xl">
+    <header className={`fixed left-0 right-0 top-0 z-50 px-3 sm:px-5 lg:px-8 transition-all duration-300 ${scrolled ? 'pt-2' : 'pt-4'}`}>
+      <nav className="mx-auto flex w-full max-w-[1440px] items-center justify-between rounded-full border border-white/60 bg-white/70 px-4 py-3 sm:px-6 shadow-[0px_4px_24px_0px_rgba(0,0,0,0.04)] backdrop-blur-xl">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2" onClick={closeMobile}>
           <div className="flex h-10 w-28 items-center justify-center">
@@ -113,7 +112,7 @@ const Navbar = () => {
 
         {/* Right Section */}
         <div className="flex items-center gap-4">
-          {!isMobile && authRight()}
+          {!isMobile && authRight(false)}
           {isMobile && (
             <button
               ref={btnRef}
@@ -133,7 +132,7 @@ const Navbar = () => {
       {isMobile && mobileOpen && (
         <div
           ref={panelRef}
-          className="absolute left-6 right-6 top-[80px] mt-2 rounded-2xl border border-white/60 bg-white/95 px-6 py-6 shadow-xl backdrop-blur-xl flex flex-col gap-4 z-40"
+          className="absolute left-3 right-3 top-[76px] mt-2 rounded-2xl border border-white/60 bg-white/95 px-5 py-5 shadow-xl backdrop-blur-xl flex flex-col gap-4 z-40 sm:left-5 sm:right-5"
         >
           <Link href="/" onClick={closeMobile} className="text-base font-medium text-black">Home</Link>
           <Link href="/documentation" onClick={closeMobile} className="text-base font-medium text-black">Features</Link>
@@ -147,7 +146,7 @@ const Navbar = () => {
             <Link href="/upload" onClick={closeMobile} className="text-base font-medium text-black">Functionality</Link>
           )}
           <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col gap-3">
-            {authRight()}
+            {authRight(true)}
           </div>
         </div>
       )}

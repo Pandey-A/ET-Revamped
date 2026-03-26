@@ -1,8 +1,9 @@
 'use client';
 
+import { Suspense } from 'react';
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function Blocked() {
+function BlockedContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -22,5 +23,13 @@ export default function Blocked() {
         <button onClick={() => router.push("/")} style={{ padding: "8px 20px", background: "#fff", color: "#111", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 10, fontWeight: 600 }}>Back to Home</button>
       </div>
     </div>
+  );
+}
+
+export default function Blocked() {
+  return (
+    <Suspense fallback={<div className="blocked-page">Loading...</div>}>
+      <BlockedContent />
+    </Suspense>
   );
 }

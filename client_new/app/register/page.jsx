@@ -25,8 +25,8 @@ export default function Register() {
     try {
       const res = await register(formData);
       if (res?.success) {
-        toast.success("Identity Verified. Account Created.", { theme: "dark" });
-        setTimeout(() => router.push("/login"), 2000);
+        toast.success("Signup successful. Please verify your email before signing in.", { theme: "dark" });
+        setTimeout(() => router.push("/login"), 2500);
       } else {
         toast.error(res?.message || "Registration Failed.", { theme: "dark" });
       }
@@ -91,7 +91,7 @@ export default function Register() {
                 <label><FiLock /> Password</label>
                 <input
                   type="password"
-                  placeholder="••••••••"
+                  placeholder="At least 8 characters"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   required

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -10,7 +10,7 @@ import { ToastContainer, toast } from "react-toastify";
 import { FiLogIn, FiMail, FiLock } from "react-icons/fi";
 import "react-toastify/dist/ReactToastify.css";
 
-export default function Login() {
+function LoginContent() {
   const { login } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -45,7 +45,6 @@ export default function Login() {
             <p>
               Resume your investigation. Our <span className="text-highlight">AI Matrix</span> is ready to verify your media.
             </p>
-
           </div>
         </div>
 
@@ -72,7 +71,7 @@ export default function Login() {
                 <label><FiLock /> Password</label>
                 <input
                   type="password"
-                  placeholder="••••••••"
+                  placeholder="At least 8 characters"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   required
@@ -99,5 +98,13 @@ export default function Login() {
       <Footer />
       <ToastContainer theme="dark" />
     </div>
+  );
+}
+
+export default function Login() {
+  return (
+    <Suspense fallback={<div className="login-page-root">Loading...</div>}>
+      <LoginContent />
+    </Suspense>
   );
 }

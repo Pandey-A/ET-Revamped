@@ -85,7 +85,7 @@ export default function ForgotPasswordCard() {
   async function resetPassword(e) {
     e?.preventDefault();
     toast.dismiss();
-    if (!newPassword || newPassword.length < 6) return toast.error("Password must be at least 6 characters.");
+    if (!newPassword || newPassword.length < 8) return toast.error("Password must be at least 8 characters.");
     if (newPassword !== confirmPw) return toast.error("Passwords do not match.");
     setLoading(true);
     try {
@@ -181,7 +181,7 @@ export default function ForgotPasswordCard() {
             <motion.p className="fp-sub" key={`sub-${step}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               {step === 1 && "Tell us the email for your account — we'll send a one-time code."}
               {step === 2 && "Check your inbox. Paste or type the code below."}
-              {step === 3 && "Use a strong password (min 6 chars). You can view the text with the eye icon."}
+              {step === 3 && "Use a strong password (min 8 chars). You can view the text with the eye icon."}
             </motion.p>
 
             {step === 1 && (
@@ -232,7 +232,7 @@ export default function ForgotPasswordCard() {
                 <label className="label">New password</label>
                 <div className="input-ctrl pw">
                   <FiLock className="left-icon" />
-                  <input type={showNewPw ? "text" : "password"} placeholder="At least 6 characters" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+                  <input type={showNewPw ? "text" : "password"} placeholder="At least 8 characters" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
                   <button type="button" className="eye-btn" onClick={() => setShowNewPw((s) => !s)} aria-label={showNewPw ? "Hide password" : "Show password"}>
                     {showNewPw ? <FiEyeOff /> : <FiEye />}
                   </button>
