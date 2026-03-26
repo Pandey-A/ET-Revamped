@@ -4,10 +4,19 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const User = require('../models/User');
-const auth = require('../middleware/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'CLIENT_SECRET_KEY';
+const EMAIL_VERIFY_SECRET = process.env.EMAIL_VERIFY_SECRET || JWT_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const COOKIE_NAME = 'token';
+const SMTP_HOST = process.env.SMTP_HOST || 'smtp.resend.com';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || 'resend';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || SMTP_PORT === 465;
+const EMAIL_FROM = process.env.EMAIL_FROM || '';
+
+let cachedTransporter = null;
 
 function buildUsagePayload(user) {
   const analysisRequestLimit = Number(user.analysisRequestLimit || 5);
@@ -29,16 +38,107 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// helper: create transporter (dev). Replace with SMTP / SendGrid in prod
+function assertMailConfig() {
+  if (!SMTP_PASS) {
+    throw new Error('SMTP_PASS is missing. Configure Resend SMTP password in server .env');
+  }
+  if (!EMAIL_FROM) {
+    throw new Error('EMAIL_FROM is missing. Configure a verified sender in server .env');
+  }
+}
+
 function createTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.ethereal.email',
-    port: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587,
-    secure: false,
+  assertMailConfig();
+  if (cachedTransporter) return cachedTransporter;
+
+  cachedTransporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
     auth: {
-      user: process.env.SMTP_USER || process.env.ETHEREAL_USER,
-      pass: process.env.SMTP_PASS || process.env.ETHEREAL_PASS,
+      user: SMTP_USER,
+      pass: SMTP_PASS,
     },
+  });
+
+  return cachedTransporter;
+}
+
+function createShortVerificationToken() {
+  return crypto.randomBytes(18).toString('base64url');
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+async function sendEmailVerificationMail(user) {
+  const verificationToken = createShortVerificationToken();
+  user.emailVerificationTokenHash = hashToken(verificationToken);
+  user.emailVerificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await user.save();
+
+  const verifyUrl = `${FRONTEND_URL}/v/${encodeURIComponent(verificationToken)}`;
+  const displayName = user?.userName ? String(user.userName) : 'User';
+  const verifyEmailHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Email Verification</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+
+<body style="margin:0; padding:0; background-color:#f4f6f8; font-family: Arial, sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding: 20px;">
+    <tr>
+      <td align="center">
+        <table width="500" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:10px; padding:30px; box-shadow:0 4px 12px rgba(0,0,0,0.05);">
+          <tr>
+            <td align="center" style="padding-bottom:20px;">
+              <h2 style="margin:0; color:#333;">Verify Your Email</h2>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="color:#555; font-size:16px; line-height:1.6;">
+              <p>Hello ${displayName},</p>
+              <p>
+                Thanks for signing up! Please confirm your email address by clicking the button below.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:25px 0;">
+              <a href="${verifyUrl}"
+                 style="background-color:#4f46e5; color:#ffffff; padding:12px 24px; text-decoration:none; border-radius:6px; font-size:16px; display:inline-block;">
+                Verify Email
+              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding-top:20px; font-size:12px; color:#999; text-align:center;">
+              <p>If you didn\'t create an account, you can safely ignore this email.</p>
+              <p>© 2026 ElevateTrust AI</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+
+  const transporter = createTransporter();
+  await transporter.sendMail({
+    from: EMAIL_FROM,
+    to: user.email,
+    subject: 'Verify Your Email - ElevateTrust AI',
+    text: `Hello ${displayName}, verify your account using this link: ${verifyUrl}`,
+    html: verifyEmailHtml,
   });
 }
 
@@ -46,7 +146,6 @@ function createTransporter() {
 // controllers/authController.js -> registerUser (replace existing)
 async function registerUser(req, res) {
   try {
-    console.log('registerUser body:', req.body); // <--- debug: what arrives
     const { userName, email, password, role = 'user' } = req.body || {};
 
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
@@ -61,13 +160,26 @@ async function registerUser(req, res) {
     const u = new User({ userName, email: normalizedEmail, password: hashed, role });
     await u.save();
 
+    try {
+      await sendEmailVerificationMail(u);
+    } catch (mailErr) {
+      console.error('register verification mail error', mailErr?.message || mailErr);
+      await User.deleteOne({ _id: u._id });
+      return res.status(502).json({
+        success: false,
+        message: 'Email service is not configured correctly. Please try again after mail setup.',
+      });
+    }
+
     return res.status(201).json({
       success: true,
+      message: 'Registration successful. Please verify your email before login.',
       user: {
         id: u._id,
         email: u.email,
         role: u.role,
         userName: u.userName,
+        isEmailVerified: !!u.isEmailVerified,
         ...buildUsagePayload(u),
       }
     });
@@ -82,8 +194,17 @@ async function registerUser(req, res) {
 async function loginUser(req, res) {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email });
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(401).json({ success: false, message: "User doesn't exist" });
+
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before logging in.',
+      });
+    }
 
     // BLOCK CHECK
     if (user.isBlocked) {
@@ -118,8 +239,8 @@ async function loginUser(req, res) {
 
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: false,
-      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
       path: '/',
       maxAge: 2 * 60 * 60 * 1000,
     });
@@ -132,6 +253,7 @@ async function loginUser(req, res) {
         email: user.email,
         role: user.role,
         userName: user.userName,
+        isEmailVerified: !!user.isEmailVerified,
         ...buildUsagePayload(user),
       }
     });
@@ -161,6 +283,7 @@ async function checkAuth(req, res) {
         email: user.email,
         role: user.role,
         userName: user.userName,
+        isEmailVerified: !!user.isEmailVerified,
         isBlocked: !!user.isBlocked,
         blockedUntil: user.blockedUntil || null,
         ...buildUsagePayload(user),
@@ -200,7 +323,7 @@ async function forgotPassword(req, res) {
 
     const transporter = createTransporter();
     const mailOptions = {
-      from: process.env.EMAIL_FROM || 'no-reply@yourapp.com',
+      from: EMAIL_FROM,
       to: user.email,
       subject: 'Your password reset code',
       text: `Your password reset code is ${otp}. It expires in 10 minutes.`,
@@ -260,12 +383,10 @@ async function verifyOtp(req, res) {
     user.resetOTPAttempts = 0;
     user.passwordResetTokenHash = resetTokenHash;
     user.passwordResetTokenExpiry = new Date(Date.now() + (15 * 60 * 1000)); // 15 minutes
+    // OTP verification proves email ownership, so mark as verified
+    user.isEmailVerified = true;
+    user.emailVerifiedAt = new Date();
     await user.save();
-
-    // Debug logs (safe: show lengths and expiry only)
-    console.log('VERIFY-OTP: generated resetToken length:', resetToken.length);
-    console.log('VERIFY-OTP: saved passwordResetTokenExpiry:', user.passwordResetTokenExpiry && user.passwordResetTokenExpiry.toISOString());
-    console.log('VERIFY-OTP: passwordResetTokenHash exists:', !!user.passwordResetTokenHash);
 
     // Return plaintext resetToken to client (short-lived)
     return res.json({ success: true, message: 'OTP verified', resetToken });
@@ -278,41 +399,28 @@ async function verifyOtp(req, res) {
 // -------------------- resetPassword --------------------
 async function resetPassword(req, res) {
   try {
-    console.log('--- resetPassword called ---');
-    console.log('resetPassword req.body:', req.body); // shows incoming email, resetToken, newPassword
-
     const { email, resetToken, newPassword } = req.body || {};
     if (!email || !resetToken || !newPassword) {
-      console.log('resetPassword: missing field(s)', { email: !!email, resetToken: !!resetToken, newPassword: !!newPassword });
       return res.status(400).json({ success: false, message: 'Email, token and new password required' });
     }
 
     const user = await User.findOne({ email: email.toLowerCase() });
-    console.log('resetPassword: user found?', !!user, 'email:', user?.email);
-    console.log('resetPassword: stored passwordResetTokenExpiry:', user?.passwordResetTokenExpiry && user.passwordResetTokenExpiry.toISOString());
-    console.log('resetPassword: passwordResetTokenHash exists?', !!user?.passwordResetTokenHash);
 
     if (!user || !user.passwordResetTokenHash || !user.passwordResetTokenExpiry) {
       return res.status(400).json({ success: false, message: 'Invalid or expired token' });
     }
 
     if (new Date() > user.passwordResetTokenExpiry) {
-      console.log('resetPassword: token expired now:', new Date().toISOString());
       user.passwordResetTokenHash = null;
       user.passwordResetTokenExpiry = null;
       await user.save();
       return res.status(400).json({ success: false, message: 'Reset token expired' });
     }
 
-    console.log('resetPassword: about to compare incoming token length:', resetToken.length);
     const ok = await bcrypt.compare(resetToken, user.passwordResetTokenHash);
-    console.log('resetPassword: bcrypt.compare result:', ok);
     if (!ok) {
-      console.log('resetPassword: token compare failed. incoming token (first40):', resetToken.slice(0,40));
       return res.status(401).json({ success: false, message: 'Invalid reset token' });
     }
-    // ... continue as before
-
 
     const hashed = await bcrypt.hash(newPassword, 12);
     user.password = hashed;
@@ -323,7 +431,7 @@ async function resetPassword(req, res) {
     try {
       const transporter = createTransporter();
       await transporter.sendMail({
-        from: process.env.EMAIL_FROM || 'no-reply@yourapp.com',
+        from: EMAIL_FROM,
         to: user.email,
         subject: 'Your password has been changed',
         text: `Your account password was changed. If you did not do this, contact support.`,
@@ -339,12 +447,92 @@ async function resetPassword(req, res) {
   }
 }
 
+async function verifyEmail(req, res) {
+  try {
+    const { token } = req.body || {};
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Verification token is required' });
+    }
+
+    const now = new Date();
+    let user = null;
+
+    // One-time short token flow
+    if (!String(token).includes('.')) {
+      const tokenHash = hashToken(token);
+      user = await User.findOne({
+        emailVerificationTokenHash: tokenHash,
+        emailVerificationTokenExpiry: { $gt: now },
+      });
+    }
+
+    // Backward compatibility for legacy JWT links
+    if (!user && String(token).includes('.')) {
+      let decoded;
+      try {
+        decoded = jwt.verify(token, EMAIL_VERIFY_SECRET);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: 'Verification link is invalid or expired' });
+      }
+
+      if (decoded?.purpose !== 'email_verify' || !decoded?.id) {
+        return res.status(400).json({ success: false, message: 'Invalid verification token' });
+      }
+
+      user = await User.findById(decoded.id);
+    }
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Verification link is invalid or expired' });
+    }
+
+    if (user.isEmailVerified) {
+      return res.json({ success: true, message: 'Email is already verified' });
+    }
+
+    user.isEmailVerified = true;
+    user.emailVerifiedAt = new Date();
+    user.emailVerificationTokenHash = null;
+    user.emailVerificationTokenExpiry = null;
+    await user.save();
+
+    return res.json({ success: true, message: 'Email verified successfully. You can now log in.' });
+  } catch (err) {
+    console.error('verifyEmail error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+}
+
+async function resendVerificationEmail(req, res) {
+  try {
+    const { email } = req.body || {};
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user || user.isEmailVerified) {
+      return res.json({ success: true, message: 'If this email is unverified, a verification link has been sent.' });
+    }
+
+    await sendEmailVerificationMail(user);
+    return res.json({ success: true, message: 'If this email is unverified, a verification link has been sent.' });
+  } catch (err) {
+    console.error('resendVerificationEmail error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+}
+
 // -------------------- exports --------------------
 module.exports = {
   registerUser,
   loginUser,
   logoutUser,
   checkAuth,
+  verifyEmail,
+  resendVerificationEmail,
   forgotPassword,
   verifyOtp,
   resetPassword

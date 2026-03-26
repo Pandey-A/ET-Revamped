@@ -3,13 +3,17 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
+const helmet = require('helmet');
 require('dotenv').config();
 const auth = require("./routers/auth-route");
 const adminRoute = require('./routers/admin')
 const uploadRoute = require('./routers/upload');
+const { createRateLimiter } = require('./middleware/security');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+app.set('trust proxy', 1);
 
 
 
@@ -31,18 +35,49 @@ mongoose.connection.on('error', (err) => console.error('Mongoose connection erro
 mongoose.connection.on('disconnected', () => console.log('Mongoose disconnected'));
 
 
-app.use(express.json());
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+}));
+
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
+const globalLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  prefix: 'global',
+  message: 'Too many API requests from this client. Please slow down.',
+});
+
+const authLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  prefix: 'auth',
+  message: 'Too many authentication attempts. Please try again later.',
+});
+
+const analysisApiLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  prefix: 'analysis-api',
+  message: 'Too many analysis requests. Please wait and retry.',
+});
+
 // CORS: allow frontend origins and credentials
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173'],
+  origin: allowedOrigins,
   credentials: true,
 }));
 
-app.use('/api/auth', auth);
+app.use('/api', globalLimiter);
+app.use('/api/auth', authLimiter, auth);
 app.use('/api/admin', adminRoute)
-app.use('/api', uploadRoute)
+app.use('/api', analysisApiLimiter, uploadRoute)
 
 // example protected admin route
 app.get('/api/admin/data', require('./middleware/auth').authMiddleware, require('./middleware/auth').adminOnly, (req, res) => {

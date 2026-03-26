@@ -1,17 +1,56 @@
 // routes/auth.js
 const express = require('express');
-const { registerUser, loginUser, logoutUser, checkAuth, forgotPassword, verifyOtp, resetPassword} = require('../controller/controller');
+const { registerUser, loginUser, logoutUser, checkAuth, verifyEmail, resendVerificationEmail, forgotPassword, verifyOtp, resetPassword} = require('../controller/controller');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
+const { createRateLimiter, getDeviceFingerprint } = require('../middleware/security');
+const { validateBody } = require('../middleware/validate');
+const {
+  registerSchema,
+  loginSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
+  forgotPasswordSchema,
+  verifyOtpSchema,
+  resetPasswordSchema,
+} = require('../schemas/authSchemas');
 const router = express.Router();
 
-router.post('/register', registerUser);
-router.post('/login', loginUser);
+const otpRequestLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  prefix: 'otp-request-device',
+  code: 'OTP_REQUEST_LIMIT_REACHED',
+  message: 'Too many OTP requests from this device. Please wait before trying again.',
+  keyGenerator: (req, prefix) => {
+    const email = String(req.body?.email || '').trim().toLowerCase() || 'unknown';
+    const device = getDeviceFingerprint(req);
+    return `${prefix}:email:${email}:device:${device}`;
+  },
+});
+
+const otpVerifyLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 8,
+  prefix: 'otp-verify-device',
+  code: 'OTP_VERIFY_LIMIT_REACHED',
+  message: 'Too many OTP verification attempts from this device. Please wait and retry.',
+  keyGenerator: (req, prefix) => {
+    const email = String(req.body?.email || '').trim().toLowerCase() || 'unknown';
+    const device = getDeviceFingerprint(req);
+    return `${prefix}:email:${email}:device:${device}`;
+  },
+});
+
+router.post('/register', validateBody(registerSchema), registerUser);
+router.post('/login', validateBody(loginSchema), loginUser);
 router.post('/logout', logoutUser);
 router.get('/check-auth', authMiddleware, checkAuth);
+router.post('/verify-email', validateBody(verifyEmailSchema), verifyEmail);
+router.post('/resend-verification-email', validateBody(resendVerificationSchema), otpRequestLimiter, resendVerificationEmail);
 // existing routes...
-router.post('/forgot-password', forgotPassword);
-router.post('/verify-otp', verifyOtp);
-router.post('/reset-password', resetPassword);
+router.post('/forgot-password', validateBody(forgotPasswordSchema), otpRequestLimiter, forgotPassword);
+router.post('/verify-otp', validateBody(verifyOtpSchema), otpVerifyLimiter, verifyOtp);
+router.post('/reset-password', validateBody(resetPasswordSchema), resetPassword);
 
 
 // admin-only example: promote user

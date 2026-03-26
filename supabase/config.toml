@@ -1,0 +1,42 @@
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+[storage]
+enabled = false
+
+[auth]
+enabled = true
+# Disable Supabase's own email flow — we handle verification ourselves
+enable_signup = true
+# NOTE: We use our own custom email templates and SMTP via Nodemailer/Resend.
+# Do NOT enable email_confirm here — our profiles.is_email_verified column governs this.
+
+[auth.email]
+enable_signup = true
+# Disable Supabase email sending — we send via Nodemailer
+max_frequency = "1s"
+
+[auth.sms]
+enable_signup = false
+
+[functions]
+# Edge Functions not used — all logic runs in Express

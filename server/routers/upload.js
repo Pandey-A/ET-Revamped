@@ -4,10 +4,24 @@ const router = express.Router();
 const User = require('../models/User');
 const UsageLog = require('../models/usageLog');
 const { authMiddleware, userOnly } = require('../middleware/auth');
+const { createRateLimiter, singleInFlightGuard } = require('../middleware/security');
 
-const VIDEO_ANALYSIS_BASE = process.env.VIDEO_ANALYSIS_BASE || 'http://103.22.140.216:5009';
+const VIDEO_ANALYSIS_BASE = process.env.VIDEO_ANALYSIS_BASE || 'http://127.0.0.1:5006';
 const AUDIO_ANALYSIS_BASE = process.env.AUDIO_ANALYSIS_BASE || 'http://127.0.0.1:5000';
 const URL_ANALYSIS_BASE = process.env.DEEPFAKE_ANALYSIS_BASE || 'http://127.0.0.1:5002';
+
+const analysisBurstLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 8,
+  prefix: 'analysis-burst',
+  message: 'You are sending analysis requests too quickly. Please wait a bit.',
+});
+
+const singleAnalysisGuard = singleInFlightGuard({
+  ttlMs: 2 * 60 * 1000,
+  keyPrefix: 'analysis-single-flight',
+  message: 'One analysis is already in progress for this account. Please wait for completion.',
+});
 
 function buildQuotaPayload(user) {
   const analysisRequestLimit = Number(user.analysisRequestLimit || 5);
@@ -216,7 +230,7 @@ async function proxyJsonRequest(req, res, upstreamUrl, quota) {
   }
 }
 
-router.post('/analysis/video', authMiddleware, userOnly, consumeAnalysisQuota, async (req, res) => {
+router.post('/analysis/video', authMiddleware, userOnly, analysisBurstLimiter, singleAnalysisGuard, consumeAnalysisQuota, async (req, res) => {
   req.analysisMeta = {
     serviceType: 'video_upload',
     fileName: req.headers['x-upload-filename'] || null,
@@ -224,7 +238,7 @@ router.post('/analysis/video', authMiddleware, userOnly, consumeAnalysisQuota, a
   return proxyMultipartRequest(req, res, `${VIDEO_ANALYSIS_BASE}/predict/video`, req.analysisQuota);
 });
 
-router.post('/analysis/image', authMiddleware, userOnly, consumeAnalysisQuota, async (req, res) => {
+router.post('/analysis/image', authMiddleware, userOnly, analysisBurstLimiter, singleAnalysisGuard, consumeAnalysisQuota, async (req, res) => {
   req.analysisMeta = {
     serviceType: 'image_upload',
     fileName: req.headers['x-upload-filename'] || null,
@@ -240,107 +254,12 @@ router.post('/analysis/audio/predict', authMiddleware, userOnly, async (req, res
   return proxyMultipartRequest(req, res, `${AUDIO_ANALYSIS_BASE}/predict`);
 });
 
-// ─── URL Analysis: download via yt-dlp → forward to video model ────────────
-const { execFile } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-
-
-function downloadVideoFromUrl(url) {
-  return new Promise((resolve, reject) => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dfurl-'));
-    const outputTemplate = path.join(tmpDir, '%(id)s.%(ext)s');
-
-    const args = [
-      '--no-playlist',
-      '--max-filesize', '100M',
-      '-f', 'mp4/best[ext=mp4]/best',
-      '--merge-output-format', 'mp4',
-      '-o', outputTemplate,
-      url,
-    ];
-
-    execFile('yt-dlp', args, { timeout: 120_000 }, (err, stdout, stderr) => {
-      if (err) {
-        // Cleanup on error
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-        return reject(new Error(stderr || err.message || 'yt-dlp failed'));
-      }
-
-      // Find the downloaded file
-      const files = fs.readdirSync(tmpDir);
-      const videoFile = files.find(f => /\.(mp4|mkv|webm|avi|mov)$/i.test(f));
-      if (!videoFile) {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-        return reject(new Error('yt-dlp did not produce a video file'));
-      }
-
-      resolve({ filePath: path.join(tmpDir, videoFile), tmpDir, fileName: videoFile });
-    });
-  });
-}
-
-router.post('/analysis/url', authMiddleware, userOnly, consumeAnalysisQuota, async (req, res) => {
-  const url = req.body?.url;
-  if (!url) {
-    return res.status(400).json({ success: false, message: 'URL is required.' });
-  }
-
+router.post('/analysis/url', authMiddleware, userOnly, analysisBurstLimiter, singleAnalysisGuard, consumeAnalysisQuota, async (req, res) => {
   req.analysisMeta = {
     serviceType: 'url_paste',
-    pastedUrl: url,
+    pastedUrl: req.body?.url || null,
   };
-
-  let downloadInfo = null;
-
-  try {
-    // 1. Download video from URL
-    downloadInfo = await downloadVideoFromUrl(url);
-
-    // 2. Read file into buffer, use web-standard FormData + Blob
-    const fileBuffer = fs.readFileSync(downloadInfo.filePath);
-    const blob = new Blob([fileBuffer], { type: 'video/mp4' });
-    const form = new FormData();
-    form.append('video', blob, downloadInfo.fileName);
-
-    const analysisResponse = await fetch(`${VIDEO_ANALYSIS_BASE}/predict/video`, {
-      method: 'POST',
-      body: form,
-    });
-
-    if (!analysisResponse.ok) {
-      // Rollback quota on upstream failure
-      await rollbackUsage(req.user.id);
-      const refreshedUser = await User.findById(req.user.id).select('analysisRequestsUsed analysisRequestLimit');
-      const quota = buildQuotaPayload(refreshedUser);
-      const errText = await analysisResponse.text().catch(() => 'Analysis model error');
-      return res.status(analysisResponse.status).json({
-        success: false,
-        message: errText,
-        quota,
-      });
-    }
-
-    const result = await analysisResponse.json();
-    result.quota = req.analysisQuota;
-    await logUsage(req);
-
-    return res.json(result);
-  } catch (err) {
-    // Rollback quota
-    await rollbackUsage(req.user.id);
-    console.error('URL analysis error:', err.message);
-    return res.status(500).json({
-      success: false,
-      message: err.message || 'Failed to download or analyze the video from URL.',
-    });
-  } finally {
-    // Always cleanup temp files
-    if (downloadInfo?.tmpDir) {
-      try { fs.rmSync(downloadInfo.tmpDir, { recursive: true, force: true }); } catch (_) {}
-    }
-  }
+  return proxyJsonRequest(req, res, `${URL_ANALYSIS_BASE}/deepfake-check`, req.analysisQuota);
 });
 
 module.exports = router;
