@@ -4,7 +4,7 @@ import Details from "@/components/Details";
 import Footer from "@/components/Footer";
 
 export const metadata = {
-  title: "Home | ElevateTrust.AI",
+  title: "Home | Elevate Trust.in",
   description: "Advanced AI deepfake detection platform",
 };
 

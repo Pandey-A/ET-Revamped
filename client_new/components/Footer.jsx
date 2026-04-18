@@ -4,9 +4,9 @@ const Footer = () => {
   return (
     <footer className="footer">
       <div className="footer-row">
-        <span>&copy; {getCurrentYear()} ElevateTrust.Ai. All rights reserved.</span>
+        <span>&copy; {getCurrentYear()} Elevate Trust.in. All rights reserved.</span>
         <a
-          href="https://elevatetrust.ai/privacy-policy"
+          href="https://elevatetrust.in/privacy-policy"
           className="privacy-policy-url"
           target="_blank"
           rel="noopener noreferrer"
