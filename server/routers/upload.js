@@ -7,8 +7,8 @@ const { authMiddleware, userOnly } = require('../middleware/auth');
 const { createRateLimiter, singleInFlightGuard } = require('../middleware/security');
 
 const VIDEO_ANALYSIS_BASE = process.env.VIDEO_ANALYSIS_BASE || 'http://103.22.140.216:5009';
-const AUDIO_ANALYSIS_BASE = process.env.AUDIO_ANALYSIS_BASE || 'http://103.22.140.216:5009';
-const URL_ANALYSIS_BASE = process.env.DEEPFAKE_ANALYSIS_BASE || 'http://103.22.140.216:5009';
+const AUDIO_ANALYSIS_BASE = process.env.AUDIO_ANALYSIS_BASE || 'http://127.0.0.1:5010';
+const URL_ANALYSIS_BASE = process.env.DEEPFAKE_ANALYSIS_BASE || 'http://127.0.0.1:5000';
 
 const analysisBurstLimiter = createRateLimiter({
   windowMs: 60 * 1000,
