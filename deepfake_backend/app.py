@@ -32,7 +32,7 @@ def download_video(url):
 
     ydl_opts = {
         "outtmpl": os.path.join(output_dir, "%(id)s.%(ext)s"),
-        "format": "bv*+ba/best",
+        "format": "best[height<=720]/best",
         "merge_output_format": "mp4",
         "quiet": True,
     }
