@@ -445,7 +445,8 @@ function UploadContent() {
     }, 800);
 
     try {
-      const res = await fetch("/api/analysis/url", {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
+      const res = await fetch(`${apiUrl}/analysis/url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

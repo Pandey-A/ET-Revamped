@@ -78,7 +78,7 @@ async function sendEmailVerificationMail(user) {
   user.emailVerificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
   await user.save();
 
-  const verifyUrl = `${FRONTEND_URL}/v/${encodeURIComponent(verificationToken)}`;
+  const verifyUrl = `${FRONTEND_URL}/verify-email?token=${encodeURIComponent(verificationToken)}`;
   const displayName = user?.userName ? String(user.userName) : 'User';
   const verifyEmailHtml = `<!DOCTYPE html>
 <html>
