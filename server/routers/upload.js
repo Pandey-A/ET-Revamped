@@ -8,7 +8,7 @@ const { createRateLimiter, singleInFlightGuard } = require('../middleware/securi
 
 const VIDEO_ANALYSIS_BASE = process.env.VIDEO_ANALYSIS_BASE || 'http://103.22.140.216:5009';
 const AUDIO_ANALYSIS_BASE = process.env.AUDIO_ANALYSIS_BASE || 'http://127.0.0.1:5010';
-const URL_ANALYSIS_BASE = process.env.DEEPFAKE_ANALYSIS_BASE || 'http://127.0.0.1:5002';
+const URL_ANALYSIS_BASE = process.env.DEEPFAKE_ANALYSIS_BASE || 'http://127.0.0.1:5003';
 
 const analysisBurstLimiter = createRateLimiter({
   windowMs: 60 * 1000,
