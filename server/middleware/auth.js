@@ -1,6 +1,6 @@
 // middleware/auth.js
 const jwt = require('jsonwebtoken');
-const User = require('../models/User'); // make sure path is correct
+const User = require('../models/user'); // make sure path is correct
 const JWT_SECRET = process.env.JWT_SECRET || 'CLIENT_SECRET_KEY';
 
 function buildUsagePayload(user) {

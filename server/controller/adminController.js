@@ -1,5 +1,5 @@
 // controllers/adminController.js
-const User = require('../models/User');
+const User = require('../models/user');
 const UsageLog = require('../models/usageLog');
 
 async function listUsers(req, res) {
@@ -177,7 +177,7 @@ async function changeUserRole(req, res) {
         return res.status(400).json({ success: false, message: 'You cannot change your own role' });
       }
   
-      const User = require('../models/User');
+      const User = require('../models/user');
   
       // If demoting an admin, ensure there will still be at least one admin left
       if (role === 'user') {
