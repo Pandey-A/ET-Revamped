@@ -55,7 +55,7 @@ router.post('/reset-password', validateBody(resetPasswordSchema), resetPassword)
 
 // admin-only example: promote user
 router.post('/promote/:id', authMiddleware, adminOnly, async (req, res) => {
-  const User = require('../models/User');
+  const User = require('../models/user');
   try {
     const u = await User.findById(req.params.id);
     if (!u) return res.status(404).json({ success: false, message: 'User not found' });
