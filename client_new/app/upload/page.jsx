@@ -532,9 +532,10 @@ function UploadContent() {
     }, 500);
 
     try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
       const videoFormData = new FormData();
       videoFormData.append("video", selectedFile);
-      const videoResponse = await fetch(VIDEO_MODEL_API_URL, { method: "POST", body: videoFormData });
+      const videoResponse = await fetch(`${apiUrl}/analysis/video`, { method: "POST", body: videoFormData, credentials: "include" });
       if (!videoResponse.ok) {
         const { message, quota, code } = await parseErrorResponse(videoResponse, `Video analysis failed (${videoResponse.status})`);
         if (code === "ANALYSIS_LIMIT_REACHED") { blockForUpgrade(quota, message); e.target.value = ""; return; }
@@ -587,9 +588,10 @@ function UploadContent() {
     }, 350);
 
     try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
       const imageFormData = new FormData();
       imageFormData.append("image", selectedFile);
-      const imageResponse = await fetch(IMAGE_MODEL_API_URL, { method: "POST", body: imageFormData });
+      const imageResponse = await fetch(`${apiUrl}/analysis/image`, { method: "POST", body: imageFormData, credentials: "include" });
       if (!imageResponse.ok) {
         const { message, quota, code } = await parseErrorResponse(imageResponse, `Image analysis failed (${imageResponse.status})`);
         if (code === "ANALYSIS_LIMIT_REACHED") { blockForUpgrade(quota, message); e.target.value = ""; return; }
