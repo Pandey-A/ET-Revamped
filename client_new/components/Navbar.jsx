@@ -102,7 +102,10 @@ const Navbar = () => {
               <Link href="/upload" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</Link>
             )}
             {user?.role === "admin" && (
-              <Link href="/admin" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</Link>
+              <>
+                <Link href="/admin" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</Link>
+                <Link href="/admin/ai-agents" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</Link>
+              </>
             )}
             {!user?.role && (
               <Link href="/upload" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</Link>
@@ -140,7 +143,10 @@ const Navbar = () => {
             <Link href="/upload" onClick={closeMobile} className="text-base font-medium text-black">Functionality</Link>
           )}
           {user?.role === "admin" && (
-            <Link href="/admin" onClick={closeMobile} className="text-base font-medium text-black">Admin</Link>
+            <>
+              <Link href="/admin" onClick={closeMobile} className="text-base font-medium text-black">Admin</Link>
+              <Link href="/admin/ai-agents" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</Link>
+            </>
           )}
           {!user?.role && (
             <Link href="/upload" onClick={closeMobile} className="text-base font-medium text-black">Functionality</Link>

@@ -1,0 +1,16 @@
+const agentId = "ebd0d685-a909-4389-83e1-4b778c3e3017";
+
+const iframe = document.createElement('iframe');
+iframe.src = `http://localhost:8080/user/mini?agent_id=${agentId}`;  // 👈 backticks + ?query param
+iframe.style.position = 'fixed';
+iframe.style.bottom = '10px';
+iframe.style.right = '10px';
+iframe.style.width = '600px';
+iframe.style.height = '800px';
+iframe.style.zIndex = '9999';
+iframe.style.border = 'none';
+iframe.style.background = 'transparent';
+iframe.allow = 'microphone; camera';
+iframe.setAttribute('allowtransparency', 'true');
+
+document.body.appendChild(iframe);
