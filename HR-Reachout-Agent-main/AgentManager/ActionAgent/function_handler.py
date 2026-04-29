@@ -23,38 +23,44 @@ except json.JSONDecodeError:
 
 class FunctionHandler:
     def __init__(self):
-        try:
-            self.token = config["ULTRAMSG"]["TOKEN"]
-            self.instance_id = config["ULTRAMSG"]["INSTANCE_ID"]
-            self.receiver_number = config["ULTRAMSG"]["PHONE_NUMBER"]
-        except KeyError as e:
-            logger.error(f"Error: Missing UltraMsg config key {e}")
-            self.token = None
-            self.instance_id = None
-            self.receiver_number = None
+        # Load WhatsApp Cloud API config
+        wa_config = config.get("WhatsApp", {})
+        self.wa_phone_number_id = wa_config.get("phone_number_id")
+        self.wa_access_token = wa_config.get("access_token")
+        self.wa_admin_phone = wa_config.get("admin_phone")
+
+        if not all([self.wa_phone_number_id, self.wa_access_token, self.wa_admin_phone]):
+            logger.error("WhatsApp Cloud API config is incomplete in config.json")
 
         self.telegram_sender = TelegramSender()
 
     def send_whatsapp_msg(self, message: str) -> str:
-        if not all([self.token, self.instance_id, self.receiver_number]):
-            return "Error: UltraMsg configuration is incomplete."
+        """Send a WhatsApp message via Meta Cloud API."""
+        if not all([self.wa_phone_number_id, self.wa_access_token, self.wa_admin_phone]):
+            return "Error: WhatsApp Cloud API configuration is incomplete."
 
         message_body = str(message) if message else "No message provided"
-        url = f"https://api.ultramsg.com/{self.instance_id}/messages/chat"
-        payload = {
-            "token": self.token,
-            "to": self.receiver_number,
-            "body": message_body,
-            "priority": 10
+        url = f"https://graph.facebook.com/v22.0/{self.wa_phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.wa_access_token}",
+            "Content-Type": "application/json",
         }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": self.wa_admin_phone.replace("+", "").replace(" ", ""),
+            "type": "text",
+            "text": {"body": message_body},
+        }
 
         try:
-            response = requests.post(url, data=payload, headers=headers)
-            response.raise_for_status()
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
             result = response.json()
-            logger.info(f"Message Sent Successfully to {self.receiver_number}: {message_body}")
-            return f"Message sent successfully! Message ID: {result.get('id', 'N/A')}"
+            if response.status_code in (200, 201):
+                logger.info(f"WhatsApp message sent to {self.wa_admin_phone}: {message_body[:100]}")
+                return f"Message sent successfully to {self.wa_admin_phone}"
+            else:
+                logger.error(f"WhatsApp API error {response.status_code}: {result}")
+                return f"Error sending WhatsApp message: {result}"
         except requests.exceptions.RequestException as e:
             logger.error(f"Error sending WhatsApp message: {e}")
             return f"Error sending WhatsApp message: {str(e)}"

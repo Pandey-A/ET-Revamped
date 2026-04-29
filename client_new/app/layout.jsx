@@ -1,5 +1,6 @@
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
+import FloatingChatWidget from "@/components/FloatingChatWidget";
 
 export const metadata = {
   title: "Elevate Trust.in",
@@ -29,8 +30,10 @@ export default function RootLayout({ children }) {
       <body>
         <AuthProvider>
           {children}
+          <FloatingChatWidget />
         </AuthProvider>
       </body>
     </html>
   );
 }
+

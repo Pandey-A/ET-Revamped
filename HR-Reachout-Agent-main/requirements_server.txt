@@ -1,0 +1,53 @@
+# Core web framework
+fastapi
+uvicorn
+gunicorn
+python-multipart
+python-dotenv
+
+# LLM / RAG - all pinned to 0.12.x family for compatibility
+llama-index==0.12.52
+llama-index-core==0.12.52.post1
+llama-index-agent-openai==0.4.12
+llama-index-llms-openai==0.4.7
+llama-index-embeddings-openai==0.3.1
+llama-index-readers-file==0.4.8
+llama-index-readers-web==0.4.5
+llama-index-vector-stores-weaviate==1.3.0
+llama-index-vector-stores-pinecone==0.4.3
+
+# Weaviate client
+weaviate-client
+
+# OpenAI & Cohere
+openai
+cohere
+
+# HTTP & networking
+requests
+httpx
+aiohttp
+aiofiles
+
+# Data processing
+pandas<2.3.0
+pydantic
+beautifulsoup4
+
+# NLP
+transformers
+torch
+
+# LiveKit
+livekit
+livekit-api
+
+# File handling
+filelock
+pypdf
+
+# Utilities
+pyyaml
+jinja2
+pandas
+openpyxl

@@ -58,6 +58,17 @@ class ToolHandler:
             description="Use this tool to notify a human via Telegram when the user is upset or requests human help."
         )
 
+        # WhatsApp notification tool
+        def send_whatsapp_wrapper(message: str) -> str:
+            """Send a WhatsApp notification message to the admin."""
+            return self.function_handler.send_whatsapp_msg(message)
+
+        self.tools["send_whatsapp"] = FunctionTool.from_defaults(
+            fn=send_whatsapp_wrapper,
+            name="send_whatsapp",
+            description="Use this tool to send a WhatsApp notification to the admin with lead details or important updates."
+        )
+
     def get_tools(self):
         return list(self.tools.values())
 

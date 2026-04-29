@@ -30,15 +30,19 @@ from .models import ChatRequest, AnalyzeAction
 from .routes.livekit_token import router as livekit_router
 
 from AgentManager.telegram.chat_session_mapping import (
+    get_session_id_for_chat_id,
     get_chat_id_for_session,
     get_bot_token_for_chat_id,
     get_bot_token_for_session,
     get_session_id_for_bot_token
 )
 from AgentManager.telegram.sender import TelegramSender
+from AgentManager.whatsapp_handler import whatsapp_api
+from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
 
 TICKETS_DB = "tickets_store.json"
 AGENTS_DB = "Agents_store.json"
+LEADS_DB = "leads_store.json"
 
 # ─── Indexing Status Tracker ──────────────────────────────────────────────────
 # Tracks background indexing tasks so frontend can poll for completion
@@ -78,14 +82,205 @@ async def create_or_get_session():
     session_id = f"session_{datetime.utcnow().date()}_{uuid.uuid4()}"
     return {"session_id": session_id}
 
+
+# ─── WhatsApp Webhook ─────────────────────────────────────────────────────────
+
+@app.get("/webhook/whatsapp")
+async def verify_whatsapp_webhook(request: Request):
+    """Verify webhook from Meta"""
+    hub_mode = request.query_params.get("hub.mode")
+    hub_verify_token = request.query_params.get("hub.verify_token")
+    hub_challenge = request.query_params.get("hub.challenge")
+
+    VERIFY_TOKEN = "12345"
+
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        return int(hub_challenge)
+    return JSONResponse(status_code=403, content={"error": "Verification failed"})
+
+
+async def async_process_whatsapp(session_id: str, phone: str, text: str):
+    try:
+        logging.info(f"Processing WhatsApp for {phone}: {text}")
+        # chat history user message is not added here because query_handler does not add it immediately, wait it does not add the user message if it's called via aprocess_query.
+        # Let's add it via chat_history_handler
+        chat_history_handler.add_message(session_id, "user", text)
+        
+        # Pick the first agent from Agents_store or None
+        agent_id = None
+        if os.path.exists(AGENTS_DB):
+            with open(AGENTS_DB, "r") as f:
+                agents = json.load(f)
+                if agents:
+                    agent_id = agents[0].get("id")
+
+        response_gen = await query_handler.aprocess_query(text, session_id, agent_id)
+        
+        full_response = ""
+        async for chunk in response_gen:
+            if chunk:
+                full_response += chunk
+                
+        if full_response:
+            chat_history_handler.add_message(session_id, "assistant", full_response)
+            whatsapp_api._send_message("+" + phone.replace("+", ""), full_response)
+            
+            # Run lead extraction
+            extract_and_save_lead(session_id, phone, agent_id)
+            
+    except Exception as e:
+        logging.error(f"Failed in async_process_whatsapp: {e}")
+
+
+@app.post("/webhook/whatsapp")
+async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+    try:
+        data = await request.json()
+        
+        if "entry" in data:
+            for entry in data["entry"]:
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    if "messages" in value:
+                        for msg in value["messages"]:
+                            if msg.get("type") == "text":
+                                phone = msg.get("from")
+                                text = msg["text"]["body"]
+                                session_id = f"whatsapp_{phone}"
+                                
+                                background_tasks.add_task(async_process_whatsapp, session_id, phone, text)
+                                
+        return {"status": "success"}
+    except Exception as e:
+        logging.error(f"WhatsApp webhook error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ─── Lead Capture ─────────────────────────────────────────────────────────────
+
+@app.post("/leads/capture")
+async def capture_lead(request: Request):
+    """
+    Capture a lead from the floating chat widget.
+    Expects JSON with: session_id, name, email, phone
+    Generates a conversation summary and sends it to WhatsApp.
+    """
+    try:
+        data = await request.json()
+        session_id = data.get("session_id")
+        name = data.get("name", "Unknown")
+        email = data.get("email", "Not provided")
+        phone = data.get("phone", "Not provided")
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id required")
+
+        # Generate conversation summary from chat history
+        try:
+            chat_history = chat_history_handler.get_formatted_history(session_id)
+            if chat_history and chat_history.strip():
+                # Load OpenAI key from config
+                try:
+                    with open("AgentManager/config.json", "r") as f:
+                        config_data = json.load(f)
+                    openai_key = config_data.get("OpenAI", {}).get("Key")
+                    if openai_key:
+                        os.environ["OPENAI_API_KEY"] = openai_key
+                except Exception as e:
+                    logging.warning(f"Could not load OpenAI key from config: {e}")
+
+                from llama_index.llms.openai import OpenAI
+                summary_llm = OpenAI(model="gpt-4o-mini", temperature=0.3)
+                summary_prompt = (
+                    f"Summarize this customer conversation in 3-4 bullet points. "
+                    f"Focus on what the user was interested in and any key details:\n\n{chat_history}"
+                )
+                summary_resp = summary_llm.complete(summary_prompt)
+                summary = summary_resp.text.strip()
+            else:
+                summary = "No conversation history available."
+        except Exception as e:
+            logging.error(f"Failed to generate summary: {e}")
+            summary = "Summary generation failed."
+
+        # Build lead data
+        lead_data = {
+            "session_id": session_id,
+            "name": name,
+            "email": email,
+            "phone": phone,
+            "summary": summary,
+            "captured_at": datetime.utcnow().isoformat(),
+            "whatsapp_sent": False,
+        }
+
+        # Save to leads_store.json
+        try:
+            if os.path.exists(LEADS_DB):
+                with open(LEADS_DB, "r") as f:
+                    leads = json.load(f)
+            else:
+                leads = []
+
+            leads.append(lead_data)
+            with open(LEADS_DB, "w") as f:
+                json.dump(leads, f, indent=2)
+        except Exception as e:
+            logging.error(f"Failed to save lead: {e}")
+
+        # Send to WhatsApp
+        wa_result = whatsapp_api.send_lead_notification(lead_data)
+        lead_data["whatsapp_sent"] = wa_result.get("status") == "success"
+
+        # Update the saved record with whatsapp status
+        try:
+            with open(LEADS_DB, "r") as f:
+                leads = json.load(f)
+            for ld in reversed(leads):
+                if ld["session_id"] == session_id:
+                    ld["whatsapp_sent"] = lead_data["whatsapp_sent"]
+                    break
+            with open(LEADS_DB, "w") as f:
+                json.dump(leads, f, indent=2)
+        except Exception:
+            pass
+
+        logging.info(f"[LeadCapture] Lead saved for session {session_id}: {name} / {email} / {phone}")
+        return {
+            "status": "captured",
+            "whatsapp_sent": lead_data["whatsapp_sent"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[LeadCapture] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/leads")
+async def get_leads():
+    """Return all captured leads."""
+    try:
+        if os.path.exists(LEADS_DB):
+            with open(LEADS_DB, "r") as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        logging.error(f"Failed to load leads: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 def auto_bind_chat_id(bot_token: str, chat_id: str) -> str | None:
     with open(TICKETS_DB, "r+") as f:
         tickets = json.load(f)
-        for ticket in tickets:
+
+        # Prefer most-recent unbound telegram ticket so new sessions can take over.
+        for ticket in reversed(tickets):
             if (
                 ticket.get("escalation_channel") == "telegram"
                 and ticket.get("bot_token") == bot_token
                 and ticket.get("chat_id") is None
+                and ticket.get("awaiting_human_response", False)
             ):
                 print("Inside auto bind function")
                 ticket["chat_id"] = chat_id
@@ -96,6 +291,32 @@ def auto_bind_chat_id(bot_token: str, chat_id: str) -> str | None:
                 f.truncate()
                 logging.info(f"[Auto-BIND] Bound chat_id {chat_id} to session {session_id}")
                 return session_id
+    return None
+
+def get_latest_active_session_for_chat(chat_id: str, bot_token: str | None = None) -> str | None:
+    if not os.path.exists(TICKETS_DB):
+        return None
+
+    with open(TICKETS_DB, "r") as f:
+        tickets = json.load(f)
+
+    # Pick the newest active ticket for this chat_id.
+    for ticket in reversed(tickets):
+        if str(ticket.get("chat_id")) != str(chat_id):
+            continue
+        if bot_token and ticket.get("bot_token") != bot_token:
+            continue
+        if not ticket.get("awaiting_human_response", False):
+            continue
+        return ticket.get("session_id")
+
+    # Fallback: newest ticket for chat_id even if awaiting flag is absent.
+    for ticket in reversed(tickets):
+        if str(ticket.get("chat_id")) == str(chat_id):
+            if bot_token and ticket.get("bot_token") != bot_token:
+                continue
+            return ticket.get("session_id")
+
     return None
 
 @app.post("/telegram-webhook/{bot_token}")
@@ -109,7 +330,14 @@ async def telegram_webhook(bot_token: str, update: TelegramUpdate):
         if not user_text:
             return {"status": "ignored", "reason": "No text"}
 
-        session_id = get_session_id_for_bot_token(bot_token) or auto_bind_chat_id(bot_token, chat_id)
+        # First bind to latest pending unbound ticket for this bot (new-session friendly).
+        # Then prefer latest active mapped session for this chat_id.
+        # Final fallback keeps backward compatibility with older mapping behavior.
+        session_id = (
+            auto_bind_chat_id(bot_token, chat_id)
+            or get_latest_active_session_for_chat(chat_id, bot_token)
+            or get_session_id_for_chat_id(chat_id)
+        )
         logging.info(f"session_id : {session_id}")
         if not session_id:
             return {"status": "error", "message": "No active session associated"}
@@ -664,7 +892,7 @@ async def setup_webhooks():
     await asyncio.sleep(2)  # Give services a bit of time to settle
     try:
         # Replace with your actual public URL or tunnel URL (e.g. ngrok)
-        BASE_WEBHOOK_URL = "https://4c95afbebd82.ngrok-free.app"  # Change this
+        BASE_WEBHOOK_URL = "https://b65c-2405-201-101b-482a-151e-6624-2510-d0fd.ngrok-free.app"  # Change this
 
         for bot in config["Telegram"]["bots"]:
             bot_token = bot["bot_token"]

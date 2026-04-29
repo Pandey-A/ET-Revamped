@@ -162,7 +162,7 @@ class ActionAgentHandler:
                         tickets = json.load(f)
 
                     # hard coding for now, later logic needs to be added
-                    bot_token = "8533036378:AAHr_utPQ3oAr-b5ogbeBCDLyPHJrOi6kJk"
+                    bot_token = "8706315248:AAH-pAO4B_LohsrKQNPD-2ONhsnMVVXFZPU"
 
                     if not bot_token:
                         raise Exception("No available Telegram bots for escalation")

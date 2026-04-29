@@ -76,11 +76,17 @@ export default function AgentChatPage() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [isEscalated, setIsEscalated] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
+  const wsRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const lastSpokenMessageIdRef = useRef(null);
 
   // ── Load agent & session
   useEffect(() => {
@@ -165,6 +171,73 @@ export default function AgentChatPage() {
       .catch(() => {});
   }, [sessionId]);
 
+  // ── Track escalation status
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`${AI_AGENT_API}/chat/is_escalated/${sessionId}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        setIsEscalated(Boolean(data?.escalated));
+      })
+      .catch(() => setIsEscalated(false));
+  }, [sessionId]);
+
+  // ── User websocket for escalation events and human/telegram replies
+  useEffect(() => {
+    if (!sessionId) return;
+
+    let reconnectTimer = null;
+    let stopped = false;
+
+    const connectWs = () => {
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const apiUrl = new URL(AI_AGENT_API);
+      const wsUrl = `${wsProtocol}://${apiUrl.host}/ws?session_id=${encodeURIComponent(sessionId)}`;
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onmessage = (event) => {
+        if (event.data === "ping") return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.session_id && data.session_id !== sessionId) return;
+
+          if (data.escalated === true) {
+            setIsEscalated(true);
+            toast.info("Escalated to human support. Messages now route via Telegram/human agent.");
+            return;
+          }
+
+          if (!data.message) return;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now() + Math.random(),
+              role: (data.agent_name || "").toLowerCase() === "user" ? "user" : "assistant",
+              content: data.message,
+              timestamp: data.timestamp || new Date().toISOString(),
+            },
+          ]);
+        } catch {
+          // Ignore non-json events
+        }
+      };
+
+      socket.onclose = () => {
+        if (stopped) return;
+        reconnectTimer = setTimeout(connectWs, 5000);
+      };
+    };
+
+    connectWs();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
+  }, [sessionId]);
+
   // ── Auto scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -198,6 +271,24 @@ export default function AgentChatPage() {
     setMessages((prev) => [...prev, aiPlaceholder]);
 
     try {
+      if (isEscalated) {
+        await fetch(`${AI_AGENT_API}/tickets/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            message: text,
+            agent_name: "user",
+            agent_id: agent.id,
+          }),
+        });
+
+        setMessages((prev) =>
+          prev.filter((m) => m.id !== aiMsgId)
+        );
+        return;
+      }
+
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
@@ -278,7 +369,55 @@ export default function AgentChatPage() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming, agent, sessionId]);
+  }, [input, streaming, agent, sessionId, isEscalated]);
+
+  // ── Browser speech-to-text
+  const toggleListening = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      toast.error("Speech recognition is not supported in this browser.");
+      return;
+    }
+
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const rec = new SR();
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = () => setIsListening(true);
+    rec.onend = () => setIsListening(false);
+    rec.onerror = () => {
+      setIsListening(false);
+      toast.error("Voice capture failed. Please try again.");
+    };
+    rec.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim() || "";
+      if (transcript) setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    };
+
+    recognitionRef.current = rec;
+    rec.start();
+  }, [isListening]);
+
+  // ── Browser text-to-speech for assistant replies
+  useEffect(() => {
+    if (!voiceEnabled || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant" || last.streaming || !last.content) return;
+    if (lastSpokenMessageIdRef.current === last.id) return;
+
+    lastSpokenMessageIdRef.current = last.id;
+    const utterance = new SpeechSynthesisUtterance(last.content);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }, [messages, voiceEnabled]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -290,6 +429,7 @@ export default function AgentChatPage() {
   const clearChat = () => {
     const sid = generateSessionId();
     setMessages([]);
+    setIsEscalated(false);
     setSessionId(sid);
     sessionStorage.setItem(`session_${id}`, sid);
   };
@@ -391,11 +531,20 @@ export default function AgentChatPage() {
               <div>
                 <span className="aia-chat-topbar-name">{agent.name}</span>
                 <span className="aia-chat-topbar-sub">
-                  {streaming ? "Thinking…" : connected ? "Ready to chat" : "Backend offline"}
+                  {isEscalated
+                    ? "Escalated to human support"
+                    : streaming
+                      ? "Thinking…"
+                      : connected
+                        ? "Ready to chat"
+                        : "Backend offline"}
                 </span>
               </div>
             </div>
             <div className="aia-chat-topbar-right">
+              {isEscalated && (
+                <span className="aia-offline-badge">📲 Telegram/Human Mode</span>
+              )}
               {!connected && (
                 <span className="aia-offline-badge">⚠ Backend Offline</span>
               )}
@@ -450,6 +599,23 @@ export default function AgentChatPage() {
                 disabled={streaming}
               />
               <button
+                className="aia-chat-send-btn"
+                onClick={toggleListening}
+                disabled={streaming}
+                title={isListening ? "Stop voice input" : "Start voice input"}
+                aria-label={isListening ? "Stop voice input" : "Start voice input"}
+              >
+                {isListening ? "◼" : "🎤"}
+              </button>
+              <button
+                className="aia-chat-send-btn"
+                onClick={() => setVoiceEnabled((v) => !v)}
+                title={voiceEnabled ? "Disable voice replies" : "Enable voice replies"}
+                aria-label={voiceEnabled ? "Disable voice replies" : "Enable voice replies"}
+              >
+                {voiceEnabled ? "🔊" : "🔈"}
+              </button>
+              <button
                 className={`aia-chat-send-btn ${streaming ? "aia-chat-send-btn--loading" : ""}`}
                 onClick={sendMessage}
                 disabled={streaming || !input.trim()}
@@ -459,7 +625,7 @@ export default function AgentChatPage() {
               </button>
             </div>
             <p className="aia-chat-input-hint">
-              RAG-powered · Knowledge base: {agent.resource_list?.length || 0} docs · Session: {sessionId?.slice(-8)}
+              {isEscalated ? "Escalated: messages are routed to human support" : "RAG-powered"} · Knowledge base: {agent.resource_list?.length || 0} docs · Session: {sessionId?.slice(-8)}
             </p>
           </div>
         </div>

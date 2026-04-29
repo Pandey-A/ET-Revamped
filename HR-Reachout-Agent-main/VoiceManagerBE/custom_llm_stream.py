@@ -155,7 +155,7 @@ class CustomLLMStream(llm.LLMStream):
             print("Before LLM Call")
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                        "https://7c84-2402-3a80-42ab-d189-39fe-d644-c96c-2027.ngrok-free.app/api/chat/stream/voice",
+                        "https://b65c-2405-201-101b-482a-151e-6624-2510-d0fd.ngrok-free.app/api/chat/stream/voice",
                         json=payload,
                         headers=headers,
                 ) as response:

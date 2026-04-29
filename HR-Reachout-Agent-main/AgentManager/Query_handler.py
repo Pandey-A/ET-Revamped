@@ -66,7 +66,7 @@ class QueryHandler:
         self.logger.info(f"QueryHandler: Sending session_id {session_id} to webhook")
         try:
             response = requests.post(
-                "https://773c-2401-4900-4824-bdfe-583f-89f7-e596-70b6.ngrok-free.app/set-session-id",
+                "https://b65c-2405-201-101b-482a-151e-6624-2510-d0fd.ngrok-free.app/set-session-id",
                 json={"session_id": session_id},
                 timeout=5
             )
@@ -138,6 +138,36 @@ class QueryHandler:
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             
+            # For anonymous/public chat sessions, inject lead-gen behavior
+            if session_id.startswith("anon_") or session_id.startswith("whatsapp_"):
+                is_start = len(chat_history) <= 2
+                is_whatsapp = session_id.startswith("whatsapp_")
+                
+                lead_gen_instruction = (
+                    "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
+                    "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
+                    "\nHere are your strict rules:"
+                    "\n1. First and foremost, answer the user's questions clearly using your knowledge base."
+                    "\n2. When the user asks how to use the platform or what it does, guide them to SIGN UP and go to the FUNCTIONALITY/UPLOAD page."
+                    "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
+                    "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
+                )
+                if is_whatsapp:
+                    lead_gen_instruction += (
+                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
+                    )
+                else:
+                    lead_gen_instruction += (
+                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name, email, and phone number?'"
+                    )
+                lead_gen_instruction += (
+                    "\n6. NEVER ask for their contact details at the very beginning of the chat or if they are still asking questions."
+                    "\n7. NEVER repeat a question you have already asked."
+                    "\n8. Keep your responses concise and conversational."
+                )
+                
+                content += lead_gen_instruction
+            
             agent = core_agent.create_core_agent(
                 monitoring_result.get("sentiment_analysis", {}), collection_name=collection_name
             )
@@ -186,6 +216,36 @@ class QueryHandler:
             content = self._get_description_from_store(agent_id)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
+            # For anonymous/public chat sessions, inject lead-gen behavior
+            if session_id.startswith("anon_") or session_id.startswith("whatsapp_"):
+                is_start = len(chat_history) <= 2
+                is_whatsapp = session_id.startswith("whatsapp_")
+                
+                lead_gen_instruction = (
+                    "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
+                    "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
+                    "\nHere are your strict rules:"
+                    "\n1. First and foremost, answer the user's questions clearly using your knowledge base."
+                    "\n2. When the user asks how to use the platform or what it does, guide them to SIGN UP and go to the FUNCTIONALITY/UPLOAD page."
+                    "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
+                    "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
+                )
+                if is_whatsapp:
+                    lead_gen_instruction += (
+                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
+                    )
+                else:
+                    lead_gen_instruction += (
+                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name, email, and phone number?'"
+                    )
+                lead_gen_instruction += (
+                    "\n6. NEVER ask for their contact details at the very beginning of the chat or if they are still asking questions."
+                    "\n7. NEVER repeat a question you have already asked."
+                    "\n8. Keep your responses concise and conversational."
+                )
+                
+                content += lead_gen_instruction
+                
             agent = core_agent.create_core_agent(
                 monitoring_result.get("sentiment_analysis", {}), collection_name=collection_name
             )
@@ -211,11 +271,39 @@ class QueryHandler:
             self.logger.info(f"Post processing query for session_id {session_id} & {agent_id}")
             print(f"[DEBUG] post_process_query received agent_id 2: {agent_id}")
 
-            # Add user query and assistant response to chat history
+            # Add latest user/assistant turn to chat history.
+            # Keep a lightweight dedupe guard because analyze_action can be retried.
             chat_history = chat_history_handler.get_chat_history(session_id=session_id)
-            if not chat_history:
+            add_user = True
+            add_assistant = True
+
+            if chat_history:
+                last_msg = chat_history[-1]
+                last_role = str(getattr(last_msg, "role", "")).lower()
+                last_content = getattr(last_msg, "content", "")
+
+                if "user" in last_role and last_content == user_query:
+                    add_user = False
+                if "assistant" in last_role and last_content == assistant_response:
+                    add_assistant = False
+
+                if len(chat_history) >= 2:
+                    prev_msg = chat_history[-2]
+                    prev_role = str(getattr(prev_msg, "role", "")).lower()
+                    prev_content = getattr(prev_msg, "content", "")
+                    if (
+                        "user" in prev_role
+                        and prev_content == user_query
+                        and "assistant" in last_role
+                        and last_content == assistant_response
+                    ):
+                        add_user = False
+                        add_assistant = False
+
+            if add_user:
                 chat_history_handler.add_message(session_id, "user", user_query)
                 self.logger.info("Added user query to chat history.")
+            if add_assistant:
                 chat_history_handler.add_message(session_id, "assistant", assistant_response)
                 self.logger.info("Added assistant response to chat history.")
 
@@ -234,6 +322,8 @@ class QueryHandler:
             self.logger.info(f"Escalation detected: {escalated}")
             self.send_session_to_webhook(session_id)
             self.logger.info(f"Sent session_id {session_id} to webhook")
+
+
 
             return {
                 "status": "success",
