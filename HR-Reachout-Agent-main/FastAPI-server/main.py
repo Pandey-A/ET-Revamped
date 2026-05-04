@@ -99,13 +99,23 @@ async def verify_whatsapp_webhook(request: Request):
     return JSONResponse(status_code=403, content={"error": "Verification failed"})
 
 
-async def async_process_whatsapp(session_id: str, phone: str, text: str):
+async def async_process_whatsapp(
+    session_id: str,
+    phone: str,
+    text: str,
+    waba_id: str = None,
+    phone_number_id: str = None,
+    display_phone_number: str = None,
+):
     try:
-        logging.info(f"Processing WhatsApp for {phone}: {text}")
-        # chat history user message is not added here because query_handler does not add it immediately, wait it does not add the user message if it's called via aprocess_query.
-        # Let's add it via chat_history_handler
+        logging.info(
+            f"[WhatsApp] Incoming message | WABA ID: {waba_id} | "
+            f"Bot phone_number_id: {phone_number_id} | "
+            f"Bot display number: {display_phone_number} | "
+            f"From: {phone} | Text: {text}"
+        )
         chat_history_handler.add_message(session_id, "user", text)
-        
+
         # Pick the first agent from Agents_store or None
         agent_id = None
         if os.path.exists(AGENTS_DB):
@@ -115,19 +125,26 @@ async def async_process_whatsapp(session_id: str, phone: str, text: str):
                     agent_id = agents[0].get("id")
 
         response_gen = await query_handler.aprocess_query(text, session_id, agent_id)
-        
+
         full_response = ""
         async for chunk in response_gen:
             if chunk:
                 full_response += chunk
-                
+
         if full_response:
             chat_history_handler.add_message(session_id, "assistant", full_response)
-            whatsapp_api._send_message("+" + phone.replace("+", ""), full_response)
-            
-            # Run lead extraction
+            # Use the phone_number_id from the inbound webhook so the reply always
+            # comes from the same bot that received the message, even when multiple
+            # business numbers / WABA accounts are configured.
+            if phone_number_id:
+                from AgentManager.whatsapp_handler import WhatsAppCloudAPI
+                dynamic_api = WhatsAppCloudAPI(phone_number_id=phone_number_id)
+                dynamic_api._send_message("+" + phone.replace("+", ""), full_response)
+            else:
+                whatsapp_api._send_message("+" + phone.replace("+", ""), full_response)
+
             extract_and_save_lead(session_id, phone, agent_id)
-            
+
     except Exception as e:
         logging.error(f"Failed in async_process_whatsapp: {e}")
 
@@ -136,20 +153,46 @@ async def async_process_whatsapp(session_id: str, phone: str, text: str):
 async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         data = await request.json()
-        
+
         if "entry" in data:
             for entry in data["entry"]:
+                # WABA ID — identifies which Meta Business Account owns this bot
+                waba_id = entry.get("id")
+
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
+
+                    # Metadata block identifies the specific bot (phone number) that
+                    # received the message. This is present even before "messages" is.
+                    metadata = value.get("metadata", {})
+                    phone_number_id = metadata.get("phone_number_id")
+                    display_phone_number = metadata.get("display_phone_number")
+
+                    logging.info(
+                        f"[WhatsApp Webhook] WABA ID: {waba_id} | "
+                        f"Bot phone_number_id: {phone_number_id} | "
+                        f"Bot display number: {display_phone_number}"
+                    )
+
                     if "messages" in value:
                         for msg in value["messages"]:
                             if msg.get("type") == "text":
                                 phone = msg.get("from")
                                 text = msg["text"]["body"]
-                                session_id = f"whatsapp_{phone}"
-                                
-                                background_tasks.add_task(async_process_whatsapp, session_id, phone, text)
-                                
+                                # Include WABA ID and bot phone_number_id in the session
+                                # so different bots/accounts produce distinct sessions.
+                                session_id = f"whatsapp_{waba_id}_{phone_number_id}_{phone}"
+
+                                background_tasks.add_task(
+                                    async_process_whatsapp,
+                                    session_id,
+                                    phone,
+                                    text,
+                                    waba_id,
+                                    phone_number_id,
+                                    display_phone_number,
+                                )
+
         return {"status": "success"}
     except Exception as e:
         logging.error(f"WhatsApp webhook error: {e}")
