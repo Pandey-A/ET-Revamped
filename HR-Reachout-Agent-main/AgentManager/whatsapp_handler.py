@@ -20,8 +20,10 @@ GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 class WhatsAppCloudAPI:
     """Wrapper for Meta WhatsApp Cloud API to send lead notifications."""
 
-    def __init__(self):
-        self.phone_number_id = WA_CONFIG.get("phone_number_id")
+    def __init__(self, phone_number_id: str = None):
+        # Allow callers to supply the phone_number_id from the inbound webhook
+        # metadata so replies always originate from the correct bot/business number.
+        self.phone_number_id = phone_number_id or WA_CONFIG.get("phone_number_id")
         self.access_token = WA_CONFIG.get("access_token")
         self.admin_phone = WA_CONFIG.get("admin_phone")
 
