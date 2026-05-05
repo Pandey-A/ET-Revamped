@@ -185,7 +185,7 @@ urllib3
 validators
 watchdog
 watchfiles
-weaviate-client
+weaviate-client<4.12.0
 websocket-client
 websockets
 wrapt
