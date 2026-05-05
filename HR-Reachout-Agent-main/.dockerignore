@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.idea/
+.DS_Store
+*.log
+node_modules/
+logs/
+uvicorn.log
+.chainlit/
