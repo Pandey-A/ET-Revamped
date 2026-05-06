@@ -103,8 +103,8 @@ const Navbar = () => {
             )}
             {user?.role === "admin" && (
               <>
-                <Link href="/admin" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</Link>
-                <Link href="/admin/ai-agents" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</Link>
+                <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
+                <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
               </>
             )}
             {!user?.role && (
@@ -144,8 +144,8 @@ const Navbar = () => {
           )}
           {user?.role === "admin" && (
             <>
-              <Link href="/admin" onClick={closeMobile} className="text-base font-medium text-black">Admin</Link>
-              <Link href="/admin/ai-agents" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</Link>
+              <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
+              <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
             </>
           )}
           {!user?.role && (
