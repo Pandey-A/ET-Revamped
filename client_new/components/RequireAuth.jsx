@@ -13,24 +13,24 @@ export default function RequireAuth({ children, allowedRoles = ['user', 'admin']
     if (isLoading) return;
 
     if (!isAuthenticated) {
-      router.replace(`/login?from=${pathname}`);
+      window.location.href = `/login?from=${pathname}`;
       return;
     }
 
     if (user?.isBlocked) {
       const q = new URLSearchParams({ blockedUntil: user.blockedUntil || '' });
-      router.replace(`/blocked?${q.toString()}`);
+      window.location.href = `/blocked?${q.toString()}`;
       return;
     }
 
     if (!allowedRoles.includes(user?.role)) {
       if (user?.role === 'admin') {
-        router.replace('/admin');
+        window.location.href = '/admin/';
       } else {
-        router.replace('/upload');
+        window.location.href = '/upload/';
       }
     }
-  }, [isLoading, isAuthenticated, user, allowedRoles, router, pathname]);
+  }, [isLoading, isAuthenticated, user, allowedRoles, pathname]);
 
   if (isLoading) return null;
   if (!isAuthenticated) return null;

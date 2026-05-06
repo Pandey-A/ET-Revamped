@@ -228,8 +228,8 @@ export default function AIAgentsPage() {
 
   // ── Auth guard
   useEffect(() => {
-    if (!isLoading && !user) router.replace("/login");
-  }, [isLoading, user, router]);
+    if (!isLoading && !user) window.location.href = '/login/';
+  }, [isLoading, user]);
 
   // ── Load agents: show cached first, then refresh from backend
   const loadAgents = useCallback(async () => {

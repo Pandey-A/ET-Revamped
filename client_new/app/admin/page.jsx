@@ -15,9 +15,9 @@ export default function Admin() {
 
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace('/login');
+      window.location.href = '/login/';
     }
-  }, [isLoading, user, router]);
+  }, [isLoading, user]);
 
   if (isLoading) {
     return (

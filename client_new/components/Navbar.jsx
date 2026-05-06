@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 
 const Navbar = () => {
@@ -52,18 +51,18 @@ const Navbar = () => {
     if (!isAuthenticated) {
       return (
         <div className="flex items-center gap-4">
-          <Link
-            href="/register"
+          <a
+            href="/register/"
             className={`${mobileMenu ? "block" : "hidden sm:block"} text-sm font-light border border-black rounded-full px-5 py-2.5 text-black transition-colors hover:opacity-70`}
           >
             Sign up
-          </Link>
-          <Link
-            href="/login"
+          </a>
+          <a
+            href="/login/"
             className="rounded-full bg-gradient-to-b from-[#3a3a3a] to-[#1a1a1a] px-5 py-2.5 text-sm font-light text-white shadow-[inset_-4px_-6px_25px_0px_rgba(201,201,201,0.08),inset_4px_4px_10px_0px_rgba(29,29,29,0.24)] transition-all hover:opacity-90"
           >
             Sign in
-          </Link>
+          </a>
         </div>
       );
     }
@@ -87,19 +86,19 @@ const Navbar = () => {
     <header className={`fixed left-0 right-0 top-0 z-50 px-3 sm:px-5 lg:px-8 transition-all duration-300 ${scrolled ? 'pt-2' : 'pt-4'}`}>
       <nav className="mx-auto flex w-full max-w-[1440px] items-center justify-between rounded-full border border-white/60 bg-white/70 px-4 py-3 sm:px-6 shadow-[0px_4px_24px_0px_rgba(0,0,0,0.04)] backdrop-blur-xl">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2" onClick={closeMobile}>
+        <a href="/" className="flex items-center gap-2" onClick={closeMobile}>
           <div className="flex h-10 w-28 items-center justify-center">
             <img src="/assets/img/logo.png" alt="Logo" className="h-8 w-auto" />
           </div>
-        </Link>
+        </a>
 
         {/* Desktop Navigation Links */}
         {!isMobile && (
           <div className="hidden items-center gap-8 md:flex">
-            <Link href="/" className="text-sm font-light text-black transition-colors hover:opacity-70">Home</Link>
-            <Link href="/documentation" className="text-sm font-light text-black transition-colors hover:opacity-70">Features</Link>
+            <a href="/" className="text-sm font-light text-black transition-colors hover:opacity-70">Home</a>
+            <a href="/documentation/" className="text-sm font-light text-black transition-colors hover:opacity-70">Features</a>
             {user?.role === "user" && (
-              <Link href="/upload" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</Link>
+              <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
             )}
             {user?.role === "admin" && (
               <>
@@ -108,7 +107,7 @@ const Navbar = () => {
               </>
             )}
             {!user?.role && (
-              <Link href="/upload" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</Link>
+              <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
             )}
           </div>
         )}
@@ -137,10 +136,10 @@ const Navbar = () => {
           ref={panelRef}
           className="absolute left-3 right-3 top-[76px] mt-2 rounded-2xl border border-white/60 bg-white/95 px-5 py-5 shadow-xl backdrop-blur-xl flex flex-col gap-4 z-40 sm:left-5 sm:right-5"
         >
-          <Link href="/" onClick={closeMobile} className="text-base font-medium text-black">Home</Link>
-          <Link href="/documentation" onClick={closeMobile} className="text-base font-medium text-black">Features</Link>
+          <a href="/" onClick={closeMobile} className="text-base font-medium text-black">Home</a>
+          <a href="/documentation/" onClick={closeMobile} className="text-base font-medium text-black">Features</a>
           {user?.role === "user" && (
-            <Link href="/upload" onClick={closeMobile} className="text-base font-medium text-black">Functionality</Link>
+            <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
           )}
           {user?.role === "admin" && (
             <>
@@ -149,7 +148,7 @@ const Navbar = () => {
             </>
           )}
           {!user?.role && (
-            <Link href="/upload" onClick={closeMobile} className="text-base font-medium text-black">Functionality</Link>
+            <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
           )}
           <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col gap-3">
             {authRight(true)}
