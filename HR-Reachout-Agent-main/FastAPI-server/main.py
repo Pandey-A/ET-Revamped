@@ -14,11 +14,13 @@ import asyncio
 import logging
 import json
 from datetime import datetime
-from typing import List
+from typing import List, Optional, Any, Dict
 from fastapi import UploadFile, File, Form, APIRouter
 from fastapi.staticfiles import StaticFiles
 import os
 import requests
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 
 from managers.user_ws_manager import UserWebSocketManager
 from managers.agent_ws_manager import AgentWebSocketManager
@@ -43,6 +45,8 @@ from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
 TICKETS_DB = "tickets_store.json"
 AGENTS_DB = "Agents_store.json"
 LEADS_DB = "leads_store.json"
+WHATSAPP_CHANNELS_COLLECTION = "whatsapp_channels"
+DEFAULT_MONGO_URI = "mongodb+srv://admin:admin1926@cluster0.86fzwx8.mongodb.net/deepfake_et?retryWrites=true&w=majority&appName=Cluster0"
 
 # ─── Indexing Status Tracker ──────────────────────────────────────────────────
 # Tracks background indexing tasks so frontend can poll for completion
@@ -72,6 +76,63 @@ agent_ws_manager = AgentWebSocketManager()
 
 with open("AgentManager/config.json") as f:
     config = json.load(f)
+
+mongo_client: Optional[AsyncIOMotorClient] = None
+mongo_db = None
+
+
+def _load_mongo_uri() -> str:
+    return (
+        os.getenv("MONGO_URI")
+        or config.get("MongoDB", {}).get("uri")
+        or DEFAULT_MONGO_URI
+    )
+
+
+def _serialize_channel(doc: Dict[str, Any]) -> Dict[str, Any]:
+    serialized = dict(doc)
+    serialized["_id"] = str(serialized.get("_id"))
+    return serialized
+
+
+def _parse_object_id(id_str: str) -> ObjectId:
+    if not ObjectId.is_valid(id_str):
+        raise HTTPException(status_code=400, detail="Invalid channel id")
+    return ObjectId(id_str)
+
+
+def _get_agent_config(agent_id: str) -> Dict[str, Any]:
+    if not agent_id or not os.path.exists(AGENTS_DB):
+        return {}
+    try:
+        with open(AGENTS_DB, "r", encoding="utf-8") as f:
+            agents = json.load(f)
+        for agent in agents:
+            if agent.get("id") == agent_id:
+                return agent
+    except Exception as e:
+        logging.warning(f"Failed to load agent config for {agent_id}: {e}")
+    return {}
+
+
+class WhatsAppChannelCreate(BaseModel):
+    whatsapp_business_account_id: str
+    phone_number_id: str
+    display_phone_number: Optional[str] = ""
+    access_token: str
+    ai_agent_id: str
+    ai_agent_name: Optional[str] = ""
+    admin_phone: Optional[str] = ""
+
+
+class WhatsAppChannelUpdate(BaseModel):
+    whatsapp_business_account_id: Optional[str] = None
+    phone_number_id: Optional[str] = None
+    display_phone_number: Optional[str] = None
+    access_token: Optional[str] = None
+    ai_agent_id: Optional[str] = None
+    ai_agent_name: Optional[str] = None
+    admin_phone: Optional[str] = None
 
 # TELEGRAM MODELS & HELPERS
 class TelegramUpdate(BaseModel):
@@ -108,6 +169,10 @@ async def async_process_whatsapp(
     display_phone_number: str = None,
 ):
     try:
+        if mongo_db is None:
+            logging.error("[WhatsApp] MongoDB is not configured. Cannot process incoming message.")
+            return
+
         logging.info(
             f"[WhatsApp] Incoming message | WABA ID: {waba_id} | "
             f"Bot phone_number_id: {phone_number_id} | "
@@ -116,13 +181,26 @@ async def async_process_whatsapp(
         )
         chat_history_handler.add_message(session_id, "user", text)
 
-        # Pick the first agent from Agents_store or None
-        agent_id = None
-        if os.path.exists(AGENTS_DB):
-            with open(AGENTS_DB, "r") as f:
-                agents = json.load(f)
-                if agents:
-                    agent_id = agents[0].get("id")
+        channel_config = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
+            "whatsapp_business_account_id": str(waba_id),
+            "phone_number_id": str(phone_number_id),
+        })
+        if not channel_config:
+            logging.warning(
+                f"[WhatsApp] No channel mapping found for WABA={waba_id}, phone_number_id={phone_number_id}"
+            )
+            return
+
+        agent_id = channel_config.get("ai_agent_id")
+        access_token = channel_config.get("access_token")
+        admin_phone = channel_config.get("admin_phone")
+        mapped_phone_number_id = channel_config.get("phone_number_id") or phone_number_id
+
+        if not agent_id:
+            logging.warning(
+                f"[WhatsApp] Channel mapping {_serialize_channel(channel_config).get('_id')} missing ai_agent_id"
+            )
+            return
 
         response_gen = await query_handler.aprocess_query(text, session_id, agent_id)
 
@@ -132,18 +210,29 @@ async def async_process_whatsapp(
                 full_response += chunk
 
         if full_response:
-            chat_history_handler.add_message(session_id, "assistant", full_response)
-            # Use the phone_number_id from the inbound webhook so the reply always
-            # comes from the same bot that received the message, even when multiple
-            # business numbers / WABA accounts are configured.
-            if phone_number_id:
-                from AgentManager.whatsapp_handler import WhatsAppCloudAPI
-                dynamic_api = WhatsAppCloudAPI(phone_number_id=phone_number_id)
-                dynamic_api._send_message("+" + phone.replace("+", ""), full_response)
-            else:
-                whatsapp_api._send_message("+" + phone.replace("+", ""), full_response)
+            agent_config = _get_agent_config(agent_id)
+            greeting_message = (agent_config.get("greeting_message") or "").strip()
+            if greeting_message:
+                full_response = f"{greeting_message}\n\n{full_response}"
 
-            extract_and_save_lead(session_id, phone, agent_id)
+            chat_history_handler.add_message(session_id, "assistant", full_response)
+            from AgentManager.whatsapp_handler import WhatsAppCloudAPI
+
+            dynamic_api = WhatsAppCloudAPI(
+                phone_number_id=mapped_phone_number_id,
+                access_token=access_token,
+                admin_phone=admin_phone,
+            )
+            dynamic_api.send_whatsapp_message("+" + phone.replace("+", ""), full_response)
+
+            extract_and_save_lead(
+                session_id,
+                phone,
+                agent_id,
+                admin_phone=admin_phone,
+                access_token=access_token,
+                phone_number_id=mapped_phone_number_id,
+            )
 
     except Exception as e:
         logging.error(f"Failed in async_process_whatsapp: {e}")
@@ -152,6 +241,9 @@ async def async_process_whatsapp(
 @app.post("/webhook/whatsapp")
 async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
+        if mongo_db is None:
+            return JSONResponse(status_code=500, content={"error": "MongoDB is not configured"})
+
         data = await request.json()
 
         if "entry" in data:
@@ -173,6 +265,16 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                         f"Bot phone_number_id: {phone_number_id} | "
                         f"Bot display number: {display_phone_number}"
                     )
+
+                    channel_config = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
+                        "whatsapp_business_account_id": str(waba_id),
+                        "phone_number_id": str(phone_number_id),
+                    })
+                    if not channel_config:
+                        logging.warning(
+                            f"[WhatsApp Webhook] No mapping for WABA={waba_id}, phone_number_id={phone_number_id}"
+                        )
+                        continue
 
                     if "messages" in value:
                         for msg in value["messages"]:
@@ -519,6 +621,99 @@ async def get_all_agents():
     except Exception as e:
         logging.error(f"Failed to load agents: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/whatsapp/config")
+async def create_whatsapp_channel(payload: WhatsAppChannelCreate):
+    if mongo_db is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not configured")
+    now = datetime.utcnow().isoformat()
+    doc = {
+        "whatsapp_business_account_id": payload.whatsapp_business_account_id.strip(),
+        "phone_number_id": payload.phone_number_id.strip(),
+        "display_phone_number": (payload.display_phone_number or "").strip(),
+        "access_token": payload.access_token.strip(),
+        "ai_agent_id": payload.ai_agent_id.strip(),
+        "ai_agent_name": (payload.ai_agent_name or "").strip(),
+        "admin_phone": (payload.admin_phone or "").strip(),
+        "created_at": now,
+        "updated_at": now,
+    }
+    existing = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
+        "whatsapp_business_account_id": doc["whatsapp_business_account_id"],
+        "phone_number_id": doc["phone_number_id"],
+    })
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="A channel with this WhatsApp Business Account ID and Phone Number ID already exists",
+        )
+    result = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].insert_one(doc)
+    created = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({"_id": result.inserted_id})
+    return _serialize_channel(created)
+
+
+@app.get("/whatsapp/config")
+async def list_whatsapp_channels():
+    if mongo_db is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not configured")
+    docs = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find({}).sort("created_at", -1).to_list(length=1000)
+    return [_serialize_channel(d) for d in docs]
+
+
+@app.put("/whatsapp/config/{id}")
+async def update_whatsapp_channel(id: str, payload: WhatsAppChannelUpdate):
+    if mongo_db is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not configured")
+    object_id = _parse_object_id(id)
+    update_data = payload.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields provided for update")
+
+    cleaned_updates = {}
+    for key, value in update_data.items():
+        if isinstance(value, str):
+            cleaned_updates[key] = value.strip()
+        else:
+            cleaned_updates[key] = value
+    cleaned_updates["updated_at"] = datetime.utcnow().isoformat()
+
+    if "whatsapp_business_account_id" in cleaned_updates or "phone_number_id" in cleaned_updates:
+        current = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({"_id": object_id})
+        if not current:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        check_waba = cleaned_updates.get("whatsapp_business_account_id", current.get("whatsapp_business_account_id"))
+        check_phone_number_id = cleaned_updates.get("phone_number_id", current.get("phone_number_id"))
+        duplicate = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
+            "_id": {"$ne": object_id},
+            "whatsapp_business_account_id": check_waba,
+            "phone_number_id": check_phone_number_id,
+        })
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail="Another channel already uses this WhatsApp Business Account ID and Phone Number ID",
+            )
+
+    result = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].update_one(
+        {"_id": object_id},
+        {"$set": cleaned_updates},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    updated = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({"_id": object_id})
+    return _serialize_channel(updated)
+
+
+@app.delete("/whatsapp/config/{id}")
+async def delete_whatsapp_channel(id: str):
+    if mongo_db is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not configured")
+    object_id = _parse_object_id(id)
+    result = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].delete_one({"_id": object_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return {"status": "deleted", "id": id}
 
 
 @app.post("/store/agents")
@@ -931,6 +1126,17 @@ async def admin_ws(websocket: WebSocket, session_id: str):
 
 @app.on_event("startup")
 async def setup_webhooks():
+    global mongo_client, mongo_db
+    mongo_uri = _load_mongo_uri()
+    try:
+        mongo_client = AsyncIOMotorClient(mongo_uri)
+        mongo_db = mongo_client["deepfake_et"]
+        logging.info("[MongoDB] Connected for WhatsApp channel routing")
+    except Exception as e:
+        mongo_client = None
+        mongo_db = None
+        logging.error(f"[MongoDB] Failed to initialize: {e}")
+
     # Sometimes, Telegram webhooks fail during FastAPI cold startup if the public domain isn’t reachable yet (e.g., in ngrok, Docker, Cloud Run).
     await asyncio.sleep(2)  # Give services a bit of time to settle
     try:

@@ -8,6 +8,8 @@ import Chart from 'chart.js/auto';
 import { FiUpload, FiLink, FiShield, FiAlertTriangle, FiCheckCircle, FiFileText, FiPlay } from "react-icons/fi";
 import { useAuth } from "@/context/AuthContext";
 import RequireAuth from "@/components/RequireAuth";
+import { getApiBaseUrl } from "@/lib/api";
+import { getAuthHeaderObject } from "@/lib/authToken";
 import "react-toastify/dist/ReactToastify.css";
 
 const VIDEO_MODEL_API_URL = "http://103.22.140.216:5009/predict/video";
@@ -445,10 +447,10 @@ function UploadContent() {
     }, 800);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
+      const apiUrl = getApiBaseUrl();
       const res = await fetch(`${apiUrl}/analysis/url`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaderObject() },
         credentials: "include",
         body: JSON.stringify({ url: videoUrl }),
       });
@@ -532,10 +534,15 @@ function UploadContent() {
     }, 500);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
+      const apiUrl = getApiBaseUrl();
       const videoFormData = new FormData();
       videoFormData.append("video", selectedFile);
-      const videoResponse = await fetch(`${apiUrl}/analysis/video`, { method: "POST", body: videoFormData, credentials: "include" });
+      const videoResponse = await fetch(`${apiUrl}/analysis/video`, {
+        method: "POST",
+        headers: { ...getAuthHeaderObject() },
+        body: videoFormData,
+        credentials: "include",
+      });
       if (!videoResponse.ok) {
         const { message, quota, code } = await parseErrorResponse(videoResponse, `Video analysis failed (${videoResponse.status})`);
         if (code === "ANALYSIS_LIMIT_REACHED") { blockForUpgrade(quota, message); e.target.value = ""; return; }
@@ -588,10 +595,15 @@ function UploadContent() {
     }, 350);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001/api";
+      const apiUrl = getApiBaseUrl();
       const imageFormData = new FormData();
       imageFormData.append("image", selectedFile);
-      const imageResponse = await fetch(`${apiUrl}/analysis/image`, { method: "POST", body: imageFormData, credentials: "include" });
+      const imageResponse = await fetch(`${apiUrl}/analysis/image`, {
+        method: "POST",
+        headers: { ...getAuthHeaderObject() },
+        body: imageFormData,
+        credentials: "include",
+      });
       if (!imageResponse.ok) {
         const { message, quota, code } = await parseErrorResponse(imageResponse, `Image analysis failed (${imageResponse.status})`);
         if (code === "ANALYSIS_LIMIT_REACHED") { blockForUpgrade(quota, message); e.target.value = ""; return; }

@@ -1,0 +1,135 @@
+const { query } = require('../db/pool');
+
+function mapAgentRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    owner_user_id: row.owner_user_id,
+    name: row.name,
+    description: row.description,
+    greeting_message: row.greeting_message,
+    model: row.model,
+    temperature: row.temperature != null ? Number(row.temperature) : 0.7,
+    escalation_channel: row.escalation_channel,
+    collection_name: row.collection_name,
+    resource_list: row.resource_list || [],
+    public_embed: row.public_embed,
+    extra: row.extra || {},
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toClientAgent(row) {
+  const a = mapAgentRow(row);
+  if (!a) return null;
+  return {
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    greeting_message: a.greeting_message,
+    model: a.model,
+    temperature: a.temperature,
+    escalation_channel: a.escalation_channel,
+    collection_name: a.collection_name,
+    resource_list: a.resource_list,
+    public_embed: a.public_embed,
+    created_at: a.created_at,
+    updated_at: a.updated_at,
+  };
+}
+
+async function listByOwner(ownerUserId) {
+  const { rows } = await query(
+    `SELECT * FROM ai_agents WHERE owner_user_id = $1 ORDER BY created_at DESC`,
+    [String(ownerUserId)]
+  );
+  return rows.map(toClientAgent);
+}
+
+async function findByIdForOwner(agentId, ownerUserId) {
+  const { rows } = await query(
+    `SELECT * FROM ai_agents WHERE id = $1 AND owner_user_id = $2 LIMIT 1`,
+    [String(agentId), String(ownerUserId)]
+  );
+  return toClientAgent(rows[0]);
+}
+
+async function findById(agentId) {
+  const { rows } = await query(`SELECT * FROM ai_agents WHERE id = $1 LIMIT 1`, [String(agentId)]);
+  return toClientAgent(rows[0]);
+}
+
+async function insertAgent(payload) {
+  const {
+    id,
+    owner_user_id,
+    name,
+    description = '',
+    greeting_message = '',
+    model = 'gpt-4o-mini',
+    temperature = 0.7,
+    escalation_channel = 'none',
+    collection_name = '',
+    resource_list = [],
+    public_embed = true,
+    extra = {},
+  } = payload;
+
+  await query(
+    `INSERT INTO ai_agents (
+      id, owner_user_id, name, description, greeting_message, model, temperature,
+      escalation_channel, collection_name, resource_list, public_embed, extra
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12::jsonb)`,
+    [
+      id,
+      owner_user_id,
+      name,
+      description,
+      greeting_message,
+      model,
+      temperature,
+      escalation_channel,
+      collection_name,
+      JSON.stringify(resource_list),
+      public_embed,
+      JSON.stringify(extra),
+    ]
+  );
+  return findById(id);
+}
+
+async function deleteByIdForOwner(agentId, ownerUserId) {
+  const r = await query(`DELETE FROM ai_agents WHERE id = $1 AND owner_user_id = $2`, [String(agentId), String(ownerUserId)]);
+  return (r.rowCount || 0) > 0;
+}
+
+async function upsertWidgetPreset(agentId, ownerUserId, configJson) {
+  await query(
+    `INSERT INTO agent_widget_presets (agent_id, owner_user_id, config_json, updated_at)
+     VALUES ($1, $2, $3::jsonb, now())
+     ON CONFLICT (agent_id) DO UPDATE SET
+       config_json = EXCLUDED.config_json,
+       updated_at = now()`,
+    [String(agentId), String(ownerUserId), JSON.stringify(configJson)]
+  );
+}
+
+async function getWidgetPreset(agentId, ownerUserId) {
+  const { rows } = await query(
+    `SELECT config_json FROM agent_widget_presets WHERE agent_id = $1 AND owner_user_id = $2`,
+    [String(agentId), String(ownerUserId)]
+  );
+  return rows[0]?.config_json ?? null;
+}
+
+module.exports = {
+  listByOwner,
+  findByIdForOwner,
+  findById,
+  insertAgent,
+  deleteByIdForOwner,
+  upsertWidgetPreset,
+  getWidgetPreset,
+  mapAgentRow,
+};

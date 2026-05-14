@@ -11,6 +11,7 @@
   "dependencies": {
     "axios": "^1.13.6",
     "chart.js": "^4.5.1",
+    "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "motion": "^12.38.0",
     "next": "16.2.0",
@@ -19,12 +20,16 @@
     "react-icons": "^5.6.0",
     "react-scroll": "^1.9.3",
     "react-toastify": "^11.0.5",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
     "tailwindcss": "^4"
+  },
+  "optionalDependencies": {
+    "@next/swc-darwin-arm64": "16.2.0"
   }
 }

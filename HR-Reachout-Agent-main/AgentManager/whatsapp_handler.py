@@ -20,15 +20,18 @@ GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 class WhatsAppCloudAPI:
     """Wrapper for Meta WhatsApp Cloud API to send lead notifications."""
 
-    def __init__(self, phone_number_id: str = None):
+    def __init__(self, phone_number_id: str = None, access_token: str = None, admin_phone: str = None):
         # Allow callers to supply the phone_number_id from the inbound webhook
         # metadata so replies always originate from the correct bot/business number.
         self.phone_number_id = phone_number_id or WA_CONFIG.get("phone_number_id")
-        self.access_token = WA_CONFIG.get("access_token")
-        self.admin_phone = WA_CONFIG.get("admin_phone")
+        self.access_token = access_token or WA_CONFIG.get("access_token")
+        self.admin_phone = admin_phone or WA_CONFIG.get("admin_phone")
 
     def _send_message(self, to: str, text: str) -> dict:
         """Send a text message via WhatsApp Cloud API."""
+        if not self.phone_number_id or not self.access_token:
+            logger.error("[WhatsApp] Missing phone_number_id/access_token. Cannot send message.")
+            return {"status": "error", "error": "WhatsApp credentials missing"}
         url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -54,7 +57,26 @@ class WhatsAppCloudAPI:
             logger.error(f"[WhatsApp] Request failed: {e}")
             return {"status": "error", "error": str(e)}
 
-    def send_lead_notification(self, lead_data: dict) -> dict:
+    def send_whatsapp_message(
+        self,
+        to: str,
+        text: str,
+        access_token: str = None,
+        phone_number_id: str = None,
+    ) -> dict:
+        if access_token:
+            self.access_token = access_token
+        if phone_number_id:
+            self.phone_number_id = phone_number_id
+        return self._send_message(to, text)
+
+    def send_lead_notification(
+        self,
+        lead_data: dict,
+        admin_phone: str = None,
+        access_token: str = None,
+        phone_number_id: str = None,
+    ) -> dict:
         """
         Send a formatted lead notification to the admin WhatsApp number.
 
@@ -65,6 +87,13 @@ class WhatsAppCloudAPI:
             - summary (str) — AI-generated conversation summary
             - session_id (str)
         """
+        if access_token:
+            self.access_token = access_token
+        if phone_number_id:
+            self.phone_number_id = phone_number_id
+        if admin_phone:
+            self.admin_phone = admin_phone
+
         if not all([self.phone_number_id, self.access_token, self.admin_phone]):
             logger.error("[WhatsApp] Missing configuration. Cannot send lead.")
             return {"status": "error", "error": "WhatsApp config incomplete"}

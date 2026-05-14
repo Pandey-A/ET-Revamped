@@ -1,8 +1,8 @@
 // server/routers/upload.js
 const express = require('express');
 const router = express.Router();
-const User = require('../models/user');
-const UsageLog = require('../models/usageLog');
+const userRepo = require('../repositories/userRepo');
+const usageLogRepo = require('../repositories/usageLogRepo');
 const { authMiddleware, userOnly } = require('../middleware/auth');
 const { createRateLimiter, singleInFlightGuard } = require('../middleware/security');
 
@@ -61,7 +61,7 @@ function getForwardHeaders(req) {
 
 async function rollbackUsage(userId) {
   try {
-    await User.findByIdAndUpdate(userId, { $inc: { analysisRequestsUsed: -1 } });
+    await userRepo.decrementAnalysisUsed(userId);
   } catch (err) {
     console.error('usage rollback error:', err);
   }
@@ -74,8 +74,8 @@ async function logUsage(req) {
   }
 
   try {
-    await UsageLog.create({
-      user: req.user.id,
+    await usageLogRepo.create({
+      userId: req.user.id,
       serviceType: meta.serviceType,
       fileName: meta.fileName || null,
       pastedUrl: meta.pastedUrl || null,
@@ -87,47 +87,41 @@ async function logUsage(req) {
 
 async function consumeAnalysisQuota(req, res, next) {
   try {
-    const currentUser = await User.findById(req.user.id).select('analysisRequestsUsed analysisRequestLimit');
-    if (!currentUser) {
+    const currentRow = await userRepo.selectQuotaFields(req.user.id);
+    if (!currentRow) {
       return res.status(401).json({ success: false, message: 'Unauthorised' });
     }
 
-    const analysisRequestLimit = Number(currentUser.analysisRequestLimit || 5);
-    const analysisRequestsUsed = Number(currentUser.analysisRequestsUsed || 0);
+    const analysisRequestLimit = Number(currentRow.analysis_request_limit || 5);
+    let analysisRequestsUsed = Number(currentRow.analysis_requests_used || 0);
 
-    if (currentUser.analysisRequestLimit == null || currentUser.analysisRequestsUsed == null) {
-      await User.updateOne(
-        { _id: req.user.id },
-        {
-          $set: {
-            analysisRequestLimit,
-            analysisRequestsUsed,
-          },
-        }
-      );
-      currentUser.analysisRequestLimit = analysisRequestLimit;
-      currentUser.analysisRequestsUsed = analysisRequestsUsed;
+    if (currentRow.analysis_request_limit == null || currentRow.analysis_requests_used == null) {
+      await userRepo.updateUserDoc(req.user.id, {
+        analysisRequestLimit,
+        analysisRequestsUsed,
+      });
     }
+
+    const currentUser = {
+      analysisRequestLimit,
+      analysisRequestsUsed,
+    };
 
     if (analysisRequestsUsed >= analysisRequestLimit) {
       return res.status(403).json(usageLimitResponse(currentUser));
     }
 
-    const updatedUser = await User.findOneAndUpdate(
-      {
-        _id: req.user.id,
-        analysisRequestsUsed: { $lt: analysisRequestLimit },
-      },
-      { $inc: { analysisRequestsUsed: 1 } },
-      {
-        new: true,
-        select: 'analysisRequestsUsed analysisRequestLimit',
-      }
-    );
+    const { ok, user: updatedUser } = await userRepo.incrementAnalysisIfUnderLimit(req.user.id);
 
-    if (!updatedUser) {
-      const latestUser = await User.findById(req.user.id).select('analysisRequestsUsed analysisRequestLimit');
-      return res.status(403).json(usageLimitResponse(latestUser || currentUser));
+    if (!ok) {
+      const latestRow = await userRepo.selectQuotaFields(req.user.id);
+      const latestUser = latestRow
+        ? {
+            analysisRequestLimit: Number(latestRow.analysis_request_limit || 5),
+            analysisRequestsUsed: Number(latestRow.analysis_requests_used || 0),
+          }
+        : currentUser;
+      return res.status(403).json(usageLimitResponse(latestUser));
     }
 
     req.analysisQuota = buildQuotaPayload(updatedUser);
@@ -177,11 +171,11 @@ async function proxyMultipartRequest(req, res, upstreamUrl, quota) {
 
     if (!upstreamResponse.ok && quota) {
       await rollbackUsage(req.user.id);
-      const refreshedUser = await User.findById(req.user.id).select('analysisRequestsUsed analysisRequestLimit');
-      quota.analysisRequestsUsed = refreshedUser?.analysisRequestsUsed ?? Math.max((quota.analysisRequestsUsed || 1) - 1, 0);
-      quota.remainingAnalysisRequests = refreshedUser
-        ? Math.max((refreshedUser.analysisRequestLimit || 5) - (refreshedUser.analysisRequestsUsed || 0), 0)
-        : Math.max((quota.analysisRequestLimit || 5) - (quota.analysisRequestsUsed || 0), 0);
+      const refreshedRow = await userRepo.selectQuotaFields(req.user.id);
+      const used = refreshedRow != null ? Number(refreshedRow.analysis_requests_used ?? 0) : Math.max((quota.analysisRequestsUsed || 1) - 1, 0);
+      const limit = refreshedRow != null ? Number(refreshedRow.analysis_request_limit ?? 5) : quota.analysisRequestLimit || 5;
+      quota.analysisRequestsUsed = used;
+      quota.remainingAnalysisRequests = Math.max(limit - used, 0);
       quota.upgradeRequired = quota.remainingAnalysisRequests === 0;
     }
 
@@ -212,11 +206,11 @@ async function proxyJsonRequest(req, res, upstreamUrl, quota) {
 
     if (!upstreamResponse.ok && quota) {
       await rollbackUsage(req.user.id);
-      const refreshedUser = await User.findById(req.user.id).select('analysisRequestsUsed analysisRequestLimit');
-      quota.analysisRequestsUsed = refreshedUser?.analysisRequestsUsed ?? Math.max((quota.analysisRequestsUsed || 1) - 1, 0);
-      quota.remainingAnalysisRequests = refreshedUser
-        ? Math.max((refreshedUser.analysisRequestLimit || 5) - (refreshedUser.analysisRequestsUsed || 0), 0)
-        : Math.max((quota.analysisRequestLimit || 5) - (quota.analysisRequestsUsed || 0), 0);
+      const refreshedRow = await userRepo.selectQuotaFields(req.user.id);
+      const used = refreshedRow != null ? Number(refreshedRow.analysis_requests_used ?? 0) : Math.max((quota.analysisRequestsUsed || 1) - 1, 0);
+      const limit = refreshedRow != null ? Number(refreshedRow.analysis_request_limit ?? 5) : quota.analysisRequestLimit || 5;
+      quota.analysisRequestsUsed = used;
+      quota.remainingAnalysisRequests = Math.max(limit - used, 0);
       quota.upgradeRequired = quota.remainingAnalysisRequests === 0;
     }
 

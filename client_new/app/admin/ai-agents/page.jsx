@@ -7,9 +7,23 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { ToastContainer, toast } from "react-toastify";
 import { motion, AnimatePresence } from "framer-motion";
+import { getApiBaseUrl } from "@/lib/api";
+import { getAuthHeaderObject } from "@/lib/authToken";
 import "react-toastify/dist/ReactToastify.css";
 
-const AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
+async function apiFetch(path, opts = {}) {
+  const url = `${getApiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
+  const isJsonBody = typeof opts.body === "string";
+  const baseHeaders = {
+    ...getAuthHeaderObject(),
+    ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
+  };
+  return fetch(url, {
+    credentials: "include",
+    ...opts,
+    headers: { ...baseHeaders, ...opts.headers },
+  });
+}
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
 function generateId() {
@@ -28,14 +42,23 @@ function EmptyBots() {
 }
 
 // ─── Agent Card ───────────────────────────────────────────────────────────────
-function AgentCard({ agent, onChat, onResources, onDelete }) {
+function AgentCard({ agent, onOpen, onDelete }) {
   return (
     <motion.div
-      className="aia-card"
+      className="aia-card aia-card--clickable"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
       layout
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(agent)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(agent);
+        }
+      }}
     >
       <div className="aia-card-header">
         <div className="aia-avatar">{agent.name?.[0]?.toUpperCase() || "A"}</div>
@@ -49,6 +72,9 @@ function AgentCard({ agent, onChat, onResources, onDelete }) {
         </div>
       </div>
       <p className="aia-card-desc">{agent.description || "No description provided."}</p>
+      {agent.greeting_message && (
+        <p className="aia-card-desc"><strong>Greeting:</strong> {agent.greeting_message}</p>
+      )}
       {agent.resource_list?.length > 0 && (
         <div className="aia-resource-pills">
           {agent.resource_list.slice(0, 3).map((r, i) => (
@@ -64,13 +90,24 @@ function AgentCard({ agent, onChat, onResources, onDelete }) {
         </div>
       )}
       <div className="aia-card-actions">
-        <button className="aia-btn aia-btn--primary" onClick={() => onChat(agent)}>
-          💬 Chat
+        <button
+          type="button"
+          className="aia-btn aia-btn--secondary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen(agent);
+          }}
+        >
+          Open
         </button>
-        <button className="aia-btn aia-btn--secondary" onClick={() => onResources(agent)}>
-          📚 Knowledge
-        </button>
-        <button className="aia-btn aia-btn--danger" onClick={() => onDelete(agent)}>
+        <button
+          type="button"
+          className="aia-btn aia-btn--danger"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(agent);
+          }}
+        >
           🗑
         </button>
       </div>
@@ -83,6 +120,7 @@ function CreateAgentModal({ open, onClose, onCreate }) {
   const [form, setForm] = useState({
     name: "",
     description: "",
+    greeting_message: "",
     model: "gpt-4o-mini",
     temperature: "0.7",
     escalation_channel: "none",
@@ -101,27 +139,36 @@ function CreateAgentModal({ open, onClose, onCreate }) {
         id: agentId,
         name: form.name.trim(),
         description: form.description.trim(),
+        greeting_message: form.greeting_message.trim(),
         model: form.model,
         temperature: parseFloat(form.temperature),
         escalation_channel: form.escalation_channel,
         collection_name: `${form.name.trim().replace(/\s+/g, "_")}_${agentId}`,
         resource_list: [],
         created_at: new Date().toISOString(),
+        /** When false, POST /api/widget/chat rejects this agent id (public embed). Default: allow. */
+        public_embed: true,
       };
 
-      const res = await fetch(`${AI_AGENT_API}/store/agents`, {
+      const res = await apiFetch("/agents", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(agentData),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) throw new Error(data.error || "Failed to create agent");
+      if (!res.ok) throw new Error(data.message || data.detail || "Failed to create agent");
 
       toast.success(`Agent "${form.name}" created!`);
-      onCreate(agentData);
+      onCreate(data.agent || agentData);
       onClose();
-      setForm({ name: "", description: "", model: "gpt-4o-mini", temperature: "0.7", escalation_channel: "none" });
+      setForm({
+        name: "",
+        description: "",
+        greeting_message: "",
+        model: "gpt-4o-mini",
+        temperature: "0.7",
+        escalation_channel: "none",
+      });
     } catch (err) {
       toast.error(err.message || "Could not create agent");
     } finally {
@@ -170,6 +217,15 @@ function CreateAgentModal({ open, onClose, onCreate }) {
                   rows={4}
                   placeholder="You are a helpful HR assistant who answers questions about company policies…"
                   value={form.description}
+                  onChange={handleChange}
+                />
+              </div>
+              <div className="aia-form-group">
+                <label>Greeting Message (for channel replies)</label>
+                <input
+                  name="greeting_message"
+                  placeholder="e.g. Hello from ServiceNow Assistant."
+                  value={form.greeting_message}
                   onChange={handleChange}
                 />
               </div>
@@ -233,62 +289,52 @@ export default function AIAgentsPage() {
 
   // ── Load agents: show cached first, then refresh from backend
   const loadAgents = useCallback(async () => {
-    // Show cached data immediately (no spinner for cached data)
-    const stored = localStorage.getItem("ai_agents");
-    if (stored) {
-      try {
-        const cached = JSON.parse(stored);
-        if (Array.isArray(cached) && cached.length > 0) {
-          setAgents(cached);
-        }
-      } catch {}
-    }
-
     setFetchingAgents(true);
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${AI_AGENT_API}/agents`, { signal: controller.signal });
+      const timeout = setTimeout(() => controller.abort(), 12_000);
+      const res = await apiFetch("/agents", { signal: controller.signal });
       clearTimeout(timeout);
       if (res.ok) {
         const data = await res.json();
         setAgents(Array.isArray(data) ? data : []);
+      } else if (res.status === 401) {
+        setAgents([]);
       }
     } catch {
-      // Keep whatever we loaded from cache
+      // network / abort — keep current list
     } finally {
       setFetchingAgents(false);
     }
   }, []);
 
-  useEffect(() => { loadAgents(); }, [loadAgents]);
-
-  // ── Persist to localStorage whenever agents change (offline backup)
   useEffect(() => {
-    if (agents.length > 0) localStorage.setItem("ai_agents", JSON.stringify(agents));
-  }, [agents]);
+    if (!isLoading && user?.id) loadAgents();
+  }, [isLoading, user?.id, loadAgents]);
 
   const handleCreated = (agent) => {
-    setAgents((prev) => [agent, ...prev]);
+    setAgents((prev) => [agent, ...prev.filter((a) => a.id !== agent.id)]);
   };
 
-  const handleChat = (agent) => {
-    router.push(`/admin/ai-agents/${agent.id}/chat`);
-  };
-
-  const handleResources = (agent) => {
-   router.push(`/admin/ai-agents/${agent.id}/resources`);
+  const handleOpenAgent = (agent) => {
+    router.push(`/admin/ai-agents/${agent.id}`);
   };
 
   const confirmDelete = (agent) => setDeleteTarget(agent);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const updated = agents.filter((a) => a.id !== deleteTarget.id);
-    setAgents(updated);
-    localStorage.setItem("ai_agents", JSON.stringify(updated));
-    toast.success(`Agent "${deleteTarget.name}" removed.`);
-    setDeleteTarget(null);
+    try {
+      const res = await apiFetch(`/agents/${encodeURIComponent(deleteTarget.id)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Delete failed");
+      setAgents((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+      toast.success(`Agent "${deleteTarget.name}" removed.`);
+    } catch (e) {
+      toast.error(e.message || "Could not delete agent");
+    } finally {
+      setDeleteTarget(null);
+    }
   };
 
   if (isLoading) {
@@ -313,7 +359,7 @@ export default function AIAgentsPage() {
         <section className="admin-hero" aria-label="AI Agents dashboard">
           <p className="admin-kicker">AI Agent Studio</p>
           <h1>Your AI Agents</h1>
-          <p>Build, configure and chat with RAG-powered agents backed by your documents.</p>
+          <p>Click an agent to open Chat, Knowledge base, and Widget generator in one place.</p>
         </section>
 
         {/* ── Toolbar */}
@@ -341,8 +387,7 @@ export default function AIAgentsPage() {
                 <AgentCard
                   key={agent.id}
                   agent={agent}
-                  onChat={handleChat}
-                  onResources={handleResources}
+                  onOpen={handleOpenAgent}
                   onDelete={confirmDelete}
                 />
               ))}

@@ -3,7 +3,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
-const User = require('../models/user');
+const userRepo = require('../repositories/userRepo');
+
+function newUserId() {
+  return crypto.randomBytes(12).toString('hex');
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'CLIENT_SECRET_KEY';
 const EMAIL_VERIFY_SECRET = process.env.EMAIL_VERIFY_SECRET || JWT_SECRET;
@@ -72,11 +76,15 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
-async function sendEmailVerificationMail(user) {
+async function sendEmailVerificationMail(userId) {
   const verificationToken = createShortVerificationToken();
-  user.emailVerificationTokenHash = hashToken(verificationToken);
-  user.emailVerificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await user.save();
+  await userRepo.updateUserDoc(userId, {
+    emailVerificationTokenHash: hashToken(verificationToken),
+    emailVerificationTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  });
+
+  const user = await userRepo.findByIdPublic(userId);
+  if (!user) throw new Error('User not found after update');
 
   const verifyUrl = `${FRONTEND_URL}/verify-email?token=${encodeURIComponent(verificationToken)}`;
   const displayName = user?.userName ? String(user.userName) : 'User';
@@ -153,18 +161,24 @@ async function registerUser(req, res) {
 
     const normalizedEmail = String(email).trim().toLowerCase();
 
-    const exists = await User.findOne({ email: normalizedEmail });
+    const exists = await userRepo.findByEmail(normalizedEmail);
     if (exists) return res.status(400).json({ success: false, message: 'User already exists' });
 
     const hashed = await bcrypt.hash(password, 12);
-    const u = new User({ userName, email: normalizedEmail, password: hashed, role });
-    await u.save();
+    const id = newUserId();
+    const u = await userRepo.createUser({
+      id,
+      userName,
+      email: normalizedEmail,
+      passwordHash: hashed,
+      role,
+    });
 
     try {
-      await sendEmailVerificationMail(u);
+      await sendEmailVerificationMail(id);
     } catch (mailErr) {
       console.error('register verification mail error', mailErr?.message || mailErr);
-      await User.deleteOne({ _id: u._id });
+      await userRepo.deleteById(id);
       return res.status(502).json({
         success: false,
         message: 'Email service is not configured correctly. Please try again after mail setup.',
@@ -175,7 +189,7 @@ async function registerUser(req, res) {
       success: true,
       message: 'Registration successful. Please verify your email before login.',
       user: {
-        id: u._id,
+        id: u.id,
         email: u.email,
         role: u.role,
         userName: u.userName,
@@ -195,7 +209,7 @@ async function loginUser(req, res) {
   const { email, password } = req.body;
   try {
     const normalizedEmail = String(email || '').trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail });
+    const user = await userRepo.findByEmail(normalizedEmail);
     if (!user) return res.status(401).json({ success: false, message: "User doesn't exist" });
 
     if (!user.isEmailVerified) {
@@ -218,9 +232,7 @@ async function loginUser(req, res) {
           });
         }
         // timed block expired -> clear and continue
-        user.isBlocked = false;
-        user.blockedUntil = null;
-        await user.save();
+        await userRepo.updateUserDoc(user.id, { isBlocked: false, blockedUntil: null });
       } else {
         // indefinite block
         return res.status(403).json({
@@ -234,7 +246,7 @@ async function loginUser(req, res) {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ success: false, message: 'Incorrect password' });
 
-    const payload = { id: user._id, role: user.role, email: user.email, userName: user.userName };
+    const payload = { id: user.id, role: user.role, email: user.email, userName: user.userName };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '2h' });
 
     res.cookie(COOKIE_NAME, token, {
@@ -248,8 +260,9 @@ async function loginUser(req, res) {
     return res.json({
       success: true,
       message: 'Logged in successfully',
+      accessToken: token,
       user: {
-        id: user._id,
+        id: user.id,
         email: user.email,
         role: user.role,
         userName: user.userName,
@@ -273,13 +286,13 @@ function logoutUser(req, res) {
 async function checkAuth(req, res) {
   try {
     if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorised' });
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await userRepo.findByIdPublic(req.user.id);
     if (!user) return res.status(401).json({ success: false, message: 'Unauthorised' });
 
     return res.json({
       success: true,
       user: {
-        id: user._id,
+        id: user.id,
         email: user.email,
         role: user.role,
         userName: user.userName,
@@ -301,7 +314,7 @@ async function forgotPassword(req, res) {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await userRepo.findByEmail(email.toLowerCase());
     if (!user) {
       // Do not reveal existence
       return res.json({ success: true, message: 'If an account exists for this email, an OTP has been sent.' });
@@ -316,10 +329,11 @@ async function forgotPassword(req, res) {
     const otpHash = await bcrypt.hash(otp, 10);
     const expiry = new Date(Date.now() + (10 * 60 * 1000)); // 10 minutes
 
-    user.resetOTPHash = otpHash;
-    user.resetOTPExpiry = expiry;
-    user.resetOTPAttempts = 0;
-    await user.save();
+    await userRepo.updateUserDoc(user.id, {
+      resetOTPHash: otpHash,
+      resetOTPExpiry: expiry,
+      resetOTPAttempts: 0,
+    });
 
     const transporter = createTransporter();
     const mailOptions = {
@@ -346,17 +360,18 @@ async function verifyOtp(req, res) {
     const { email, otp } = req.body || {};
     if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP required' });
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await userRepo.findByEmail(email.toLowerCase());
     if (!user || !user.resetOTPHash || !user.resetOTPExpiry) {
       return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
     }
 
     // Expiry check
     if (new Date() > user.resetOTPExpiry) {
-      user.resetOTPHash = null;
-      user.resetOTPExpiry = null;
-      user.resetOTPAttempts = 0;
-      await user.save();
+      await userRepo.updateUserDoc(user.id, {
+        resetOTPHash: null,
+        resetOTPExpiry: null,
+        resetOTPAttempts: 0,
+      });
       return res.status(400).json({ success: false, message: 'OTP expired' });
     }
 
@@ -368,8 +383,9 @@ async function verifyOtp(req, res) {
     // Compare OTP
     const match = await bcrypt.compare(otp.toString(), user.resetOTPHash);
     if (!match) {
-      user.resetOTPAttempts = (user.resetOTPAttempts || 0) + 1;
-      await user.save();
+      await userRepo.updateUserDoc(user.id, {
+        resetOTPAttempts: (user.resetOTPAttempts || 0) + 1,
+      });
       return res.status(401).json({ success: false, message: 'Invalid OTP' });
     }
 
@@ -378,15 +394,15 @@ async function verifyOtp(req, res) {
     const resetTokenHash = await bcrypt.hash(resetToken, 10);
 
     // clear OTP fields and set reset token + expiry
-    user.resetOTPHash = null;
-    user.resetOTPExpiry = null;
-    user.resetOTPAttempts = 0;
-    user.passwordResetTokenHash = resetTokenHash;
-    user.passwordResetTokenExpiry = new Date(Date.now() + (15 * 60 * 1000)); // 15 minutes
-    // OTP verification proves email ownership, so mark as verified
-    user.isEmailVerified = true;
-    user.emailVerifiedAt = new Date();
-    await user.save();
+    await userRepo.updateUserDoc(user.id, {
+      resetOTPHash: null,
+      resetOTPExpiry: null,
+      resetOTPAttempts: 0,
+      passwordResetTokenHash: resetTokenHash,
+      passwordResetTokenExpiry: new Date(Date.now() + (15 * 60 * 1000)),
+      isEmailVerified: true,
+      emailVerifiedAt: new Date(),
+    });
 
     // Return plaintext resetToken to client (short-lived)
     return res.json({ success: true, message: 'OTP verified', resetToken });
@@ -404,16 +420,17 @@ async function resetPassword(req, res) {
       return res.status(400).json({ success: false, message: 'Email, token and new password required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await userRepo.findByEmail(email.toLowerCase());
 
     if (!user || !user.passwordResetTokenHash || !user.passwordResetTokenExpiry) {
       return res.status(400).json({ success: false, message: 'Invalid or expired token' });
     }
 
     if (new Date() > user.passwordResetTokenExpiry) {
-      user.passwordResetTokenHash = null;
-      user.passwordResetTokenExpiry = null;
-      await user.save();
+      await userRepo.updateUserDoc(user.id, {
+        passwordResetTokenHash: null,
+        passwordResetTokenExpiry: null,
+      });
       return res.status(400).json({ success: false, message: 'Reset token expired' });
     }
 
@@ -423,10 +440,11 @@ async function resetPassword(req, res) {
     }
 
     const hashed = await bcrypt.hash(newPassword, 12);
-    user.password = hashed;
-    user.passwordResetTokenHash = null;
-    user.passwordResetTokenExpiry = null;
-    await user.save();
+    await userRepo.updateUserDoc(user.id, {
+      password: hashed,
+      passwordResetTokenHash: null,
+      passwordResetTokenExpiry: null,
+    });
 
     try {
       const transporter = createTransporter();
@@ -456,14 +474,9 @@ async function verifyEmail(req, res) {
 
     const now = new Date();
     let user = null;
-
-    // One-time short token flow
     if (!String(token).includes('.')) {
       const tokenHash = hashToken(token);
-      user = await User.findOne({
-        emailVerificationTokenHash: tokenHash,
-        emailVerificationTokenExpiry: { $gt: now },
-      });
+      user = await userRepo.findByVerificationTokenHash(tokenHash);
     }
 
     // Backward compatibility for legacy JWT links
@@ -479,7 +492,7 @@ async function verifyEmail(req, res) {
         return res.status(400).json({ success: false, message: 'Invalid verification token' });
       }
 
-      user = await User.findById(decoded.id);
+      user = await userRepo.findById(decoded.id);
     }
 
     if (!user) {
@@ -490,11 +503,12 @@ async function verifyEmail(req, res) {
       return res.json({ success: true, message: 'Email is already verified' });
     }
 
-    user.isEmailVerified = true;
-    user.emailVerifiedAt = new Date();
-    user.emailVerificationTokenHash = null;
-    user.emailVerificationTokenExpiry = null;
-    await user.save();
+    await userRepo.updateUserDoc(user.id, {
+      isEmailVerified: true,
+      emailVerifiedAt: new Date(),
+      emailVerificationTokenHash: null,
+      emailVerificationTokenExpiry: null,
+    });
 
     return res.json({ success: true, message: 'Email verified successfully. You can now log in.' });
   } catch (err) {
@@ -511,13 +525,13 @@ async function resendVerificationEmail(req, res) {
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail });
+    const user = await userRepo.findByEmail(normalizedEmail);
 
     if (!user || user.isEmailVerified) {
       return res.json({ success: true, message: 'If this email is unverified, a verification link has been sent.' });
     }
 
-    await sendEmailVerificationMail(user);
+    await sendEmailVerificationMail(user.id);
     return res.json({ success: true, message: 'If this email is unverified, a verification link has been sent.' });
   } catch (err) {
     console.error('resendVerificationEmail error', err);

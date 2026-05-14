@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { toast, ToastContainer } from "react-toastify";
 import { motion, AnimatePresence } from "framer-motion";
+import { fetchMyAgents } from "@/lib/api";
 import "react-toastify/dist/ReactToastify.css";
 
 const AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
@@ -101,17 +102,12 @@ export default function AgentChatPage() {
     // Also try fetching from backend (in case localStorage is stale)
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    fetch(`${AI_AGENT_API}/agents`, { signal: controller.signal })
-      .then((r) => r.ok ? r.json() : null)
+    fetchMyAgents({ signal: controller.signal })
       .then((data) => {
         if (Array.isArray(data)) {
           const backendAgent = data.find((a) => a.id === id);
           if (backendAgent) {
             setAgent(backendAgent);
-            // Also update localStorage
-            try {
-              localStorage.setItem("ai_agents", JSON.stringify(data));
-            } catch {}
           }
         }
       })
@@ -124,7 +120,7 @@ export default function AgentChatPage() {
         setAgent((current) => {
           if (!current) {
             toast.error("Agent not found.");
-            router.replace("/admin/ai-agents");
+            router.replace(`/admin/ai-agents/${id}`);
           }
           return current;
         });
@@ -463,7 +459,7 @@ export default function AgentChatPage() {
               transition={{ duration: 0.25 }}
             >
               <div className="aia-chat-sidebar-header">
-                <button className="aia-back-btn" onClick={() => router.push("/admin/ai-agents")}>
+                <button className="aia-back-btn" onClick={() => router.push(`/admin/ai-agents/${id}`)}>
                   ← Agents
                 </button>
               </div>

@@ -7,6 +7,7 @@ import requests
 
 from llama_index.llms.openai import OpenAI
 from AgentManager import chat_history_handler
+from AgentManager.whatsapp_handler import whatsapp_api
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,14 @@ def _send_to_webhook(lead_data: dict, agent_id: str):
     except Exception as e:
         logger.error(f"Failed to send lead to webhook: {e}")
 
-def extract_and_save_lead(session_id: str, phone: str, agent_id: str = None):
+def extract_and_save_lead(
+    session_id: str,
+    phone: str,
+    agent_id: str = None,
+    admin_phone: str = None,
+    access_token: str = None,
+    phone_number_id: str = None,
+):
     """
     Checks if Name and Email are present in the chat history.
     If so, extracts them, summarizes chat, saves to Excel, and pushes to Webhook.
@@ -145,6 +153,18 @@ def extract_and_save_lead(session_id: str, phone: str, agent_id: str = None):
             # Save and Send
             _save_to_excel(lead_data)
             _send_to_webhook(lead_data, agent_id)
+            whatsapp_api.send_lead_notification(
+                {
+                    "name": data.get("name"),
+                    "email": data.get("email"),
+                    "phone": phone,
+                    "summary": data.get("summary"),
+                    "session_id": session_id,
+                },
+                admin_phone=admin_phone,
+                access_token=access_token,
+                phone_number_id=phone_number_id,
+            )
             
             # Mark as done
             _mark_as_extracted(session_id)

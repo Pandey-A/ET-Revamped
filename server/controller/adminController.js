@@ -1,15 +1,13 @@
 // controllers/adminController.js
-const User = require('../models/user');
-const UsageLog = require('../models/usageLog');
+const userRepo = require('../repositories/userRepo');
+const usageLogRepo = require('../repositories/usageLogRepo');
 
 async function listUsers(req, res) {
   try {
-    const users = await User.find().select('-password').lean();
-    const userIds = users.map((user) => user._id);
+    const users = await userRepo.listAllLean();
+    const userIds = users.map((user) => user.id);
 
-    const usageLogs = await UsageLog.find({ user: { $in: userIds } })
-      .sort({ createdAt: -1 })
-      .lean();
+    const usageLogs = await usageLogRepo.findByUserIds(userIds);
 
     const usageByUser = new Map();
     for (const log of usageLogs) {
@@ -50,7 +48,7 @@ async function listUsers(req, res) {
     }
 
     const usersWithUsage = users.map((user) => {
-      const usage = usageByUser.get(String(user._id)) || {
+      const usage = usageByUser.get(String(user.id)) || {
         totalUsageCount: 0,
         videoUploadCount: 0,
         imageUploadCount: 0,
@@ -60,6 +58,7 @@ async function listUsers(req, res) {
 
       return {
         ...user,
+        _id: user.id,
         usage,
       };
     });
@@ -74,13 +73,13 @@ async function listUsers(req, res) {
 async function getUserDetails(req, res) {
   try {
     const { id } = req.params;
-    const user = await User.findById(id).select('-password').lean();
+    const user = await userRepo.findByIdPublic(id);
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const activities = await UsageLog.find({ user: id }).sort({ createdAt: -1 }).lean();
+    const activities = await usageLogRepo.findByUserId(id);
     const usage = {
       totalUsageCount: activities.length,
       videoUploadCount: activities.filter((entry) => entry.serviceType === 'video_upload').length,
@@ -92,6 +91,7 @@ async function getUserDetails(req, res) {
       success: true,
       user: {
         ...user,
+        _id: user.id,
         usage,
       },
       activities: activities.map((entry) => ({
@@ -107,15 +107,13 @@ async function getUserDetails(req, res) {
   }
 }
 
-// controllers/adminController.js
 async function blockUser(req, res) {
   try {
     const { id } = req.params;
-    // Defensive: ensure req.body is an object so destructuring won't throw
     const body = req.body || {};
     const { minutes, expiresAt } = body;
 
-    const user = await User.findById(id);
+    const user = await userRepo.findByIdPublic(id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
     let blockedUntil = null;
@@ -129,13 +127,10 @@ async function blockUser(req, res) {
       if (!Number.isFinite(m) || m <= 0) return res.status(400).json({ success: false, message: 'minutes must be a positive number' });
       blockedUntil = new Date(Date.now() + m * 60000);
     } else {
-      // no body -> indefinite block (blockedUntil stays null)
       blockedUntil = null;
     }
 
-    user.isBlocked = true;
-    user.blockedUntil = blockedUntil;
-    await user.save();
+    await userRepo.updateUserDoc(id, { isBlocked: true, blockedUntil });
 
     return res.json({ success: true, blockedUntil });
   } catch (err) {
@@ -144,15 +139,12 @@ async function blockUser(req, res) {
   }
 }
 
-
 async function unblockUser(req, res) {
   try {
     const { id } = req.params;
-    const user = await User.findById(id);
+    const user = await userRepo.findByIdPublic(id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    user.isBlocked = false;
-    user.blockedUntil = null;
-    await user.save();
+    await userRepo.updateUserDoc(id, { isBlocked: false, blockedUntil: null });
     return res.json({ success: true });
   } catch (err) {
     console.error(err);
@@ -160,44 +152,41 @@ async function unblockUser(req, res) {
   }
 }
 
-// controllers/adminController.js (append)
-
 async function changeUserRole(req, res) {
-    try {
-      const adminId = req.user?.id; // id of the admin making the request (authMiddleware sets req.user)
-      const { id } = req.params; // target user id
-      const { role } = req.body; // expected 'user' or 'admin'
-  
-      if (!['user', 'admin'].includes(role)) {
-        return res.status(400).json({ success: false, message: 'Invalid role' });
-      }
-  
-      // prevent admin from changing their own role (avoid accidental lockout)
-      if (adminId === id) {
-        return res.status(400).json({ success: false, message: 'You cannot change your own role' });
-      }
-  
-      const User = require('../models/user');
-  
-      // If demoting an admin, ensure there will still be at least one admin left
-      if (role === 'user') {
-        const adminCount = await User.countDocuments({ role: 'admin' });
-        if (adminCount <= 1) {
-          return res.status(400).json({ success: false, message: 'Cannot remove the last admin' });
-        }
-      }
-  
-      const updated = await User.findByIdAndUpdate(id, { $set: { role } }, { new: true, select: '-password' });
-      if (!updated) return res.status(404).json({ success: false, message: 'User not found' });
-  
-      return res.json({ success: true, user: { id: updated._id, userName: updated.userName, email: updated.email, role: updated.role } });
-    } catch (err) {
-      console.error('changeUserRole error:', err);
-      return res.status(500).json({ success: false, message: 'Server error' });
+  try {
+    const adminId = req.user?.id;
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!['user', 'admin'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Invalid role' });
     }
+
+    if (adminId === id) {
+      return res.status(400).json({ success: false, message: 'You cannot change your own role' });
+    }
+
+    if (role === 'user') {
+      const adminCount = await userRepo.countByRole('admin');
+      if (adminCount <= 1) {
+        return res.status(400).json({ success: false, message: 'Cannot remove the last admin' });
+      }
+    }
+
+    const existing = await userRepo.findByIdPublic(id);
+    if (!existing) return res.status(404).json({ success: false, message: 'User not found' });
+
+    await userRepo.updateUserDoc(id, { role });
+    const updated = await userRepo.findByIdPublic(id);
+
+    return res.json({
+      success: true,
+      user: { id: updated.id, userName: updated.userName, email: updated.email, role: updated.role },
+    });
+  } catch (err) {
+    console.error('changeUserRole error:', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
-  
-  module.exports = { listUsers, getUserDetails, blockUser, unblockUser, changeUserRole }; // include new export
-  
+}
 
-
+module.exports = { listUsers, getUserDetails, blockUser, unblockUser, changeUserRole };

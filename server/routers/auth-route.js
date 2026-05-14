@@ -4,6 +4,7 @@ const { registerUser, loginUser, logoutUser, checkAuth, verifyEmail, resendVerif
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { createRateLimiter, getDeviceFingerprint } = require('../middleware/security');
 const { validateBody } = require('../middleware/validate');
+const userRepo = require('../repositories/userRepo');
 const {
   registerSchema,
   loginSchema,
@@ -55,12 +56,10 @@ router.post('/reset-password', validateBody(resetPasswordSchema), resetPassword)
 
 // admin-only example: promote user
 router.post('/promote/:id', authMiddleware, adminOnly, async (req, res) => {
-  const User = require('../models/user');
   try {
-    const u = await User.findById(req.params.id);
+    const u = await userRepo.findByIdPublic(req.params.id);
     if (!u) return res.status(404).json({ success: false, message: 'User not found' });
-    u.role = 'admin';
-    await u.save();
+    await userRepo.updateUserDoc(req.params.id, { role: 'admin' });
     res.json({ success: true, message: 'Promoted' });
   } catch (err) {
     console.error(err);

@@ -718,6 +718,11 @@
   gap: 14px;
 }
 .aia-card:hover { box-shadow: 0 12px 40px rgba(0,0,0,0.1); transform: translateY(-2px); }
+.aia-card--clickable { cursor: pointer; }
+.aia-card--clickable:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 3px;
+}
 .aia-card-header { display: flex; align-items: center; gap: 12px; }
 .aia-avatar {
   width: 44px; height: 44px; border-radius: 14px;
@@ -743,11 +748,75 @@
 }
 .aia-resource-pill--more { background: rgba(0,0,0,0.04); color: #888; border-color: rgba(0,0,0,0.1); }
 .aia-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.wac-token-mask { letter-spacing: 0.08em; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.wac-card-meta-line { font-size: 0.8rem; color: #777; }
 
 /* ============================================================
    Create Agent Modal
    ============================================================ */
 .aia-create-modal { max-height: 90vh; overflow-y: auto; }
+.modal-container.aia-widget-modal {
+  width: min(1100px, 96vw);
+  max-width: 96vw;
+  padding: 20px 22px 24px;
+}
+
+/* Agent hub (/admin/ai-agents/[id]) */
+.aia-avatar--lg {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  font-size: 1.35rem;
+}
+.aia-hub-top { margin-bottom: 20px; }
+.aia-hub-back {
+  display: inline-block;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #6366f1;
+  margin-bottom: 16px;
+  text-decoration: none;
+}
+.aia-hub-back:hover { text-decoration: underline; }
+.aia-hub-title-row { display: flex; align-items: center; gap: 16px; }
+.aia-hub-meta { font-size: 0.85rem; color: #888; margin-top: 6px; }
+.aia-hub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+.aia-hub-tab {
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  border: 1px solid rgba(0,0,0,0.1);
+  background: #fff;
+  color: #444;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.aia-hub-tab:hover { background: #f9fafb; border-color: rgba(99,102,241,0.25); color: #111; }
+.aia-hub-tab--active {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 14px rgba(99,102,241,0.35);
+}
+.aia-hub-section {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 20px;
+  padding: 24px 28px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+}
+.aia-hub-section--flush { background: transparent; border: none; box-shadow: none; padding: 0; }
+.aia-hub-section-title { font-size: 1.05rem; font-weight: 700; color: #0a0b14; margin: 0 0 8px; }
+.aia-hub-section-desc { font-size: 0.88rem; color: #666; line-height: 1.6; margin: 0 0 18px; max-width: 520px; }
+
 .aia-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .aia-modal-header h2 { font-size: 1.3rem; font-weight: 700; color: #0a0b14; }
 .aia-modal-close { background: transparent; color: #888; font-size: 1rem; padding: 4px 8px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); }

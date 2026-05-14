@@ -9,7 +9,9 @@
   "scripts": {
     "test": "npm run dev",
     "dev": "nodemon server.js",
-    "mail:check": "node scripts/check-mail.js"
+    "mail:check": "node scripts/check-mail.js",
+    "db:migrate": "node db/migrate.js",
+    "db:migrate-from-mongo": "node scripts/migrate-mongo-to-postgres.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -22,8 +24,11 @@
     "ioredis": "^5.8.0",
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.13.2",
     "nodemailer": "^8.0.2",
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "mongoose": "^8.13.2"
   }
 }

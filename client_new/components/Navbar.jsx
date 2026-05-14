@@ -100,10 +100,13 @@ const Navbar = () => {
             {user?.role === "user" && (
               <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
             )}
+            {(user?.role === "user" || user?.role === "admin") && (
+              <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
+            )}
             {user?.role === "admin" && (
               <>
                 <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
-                <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
+                <a href="/admin/whatsapp-channels/" className="text-sm font-light text-black transition-colors hover:opacity-70">WhatsApp</a>
               </>
             )}
             {!user?.role && (
@@ -141,10 +144,13 @@ const Navbar = () => {
           {user?.role === "user" && (
             <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
           )}
+          {(user?.role === "user" || user?.role === "admin") && (
+            <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
+          )}
           {user?.role === "admin" && (
             <>
               <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
-              <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
+              <a href="/admin/whatsapp-channels/" onClick={closeMobile} className="text-base font-medium text-black">WhatsApp</a>
             </>
           )}
           {!user?.role && (
