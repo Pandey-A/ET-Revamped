@@ -1,10 +1,14 @@
 import "./globals.css";
-import { AuthProvider } from "@/context/AuthContext";
-import FloatingChatWidget from "@/components/FloatingChatWidget";
+import dynamic from "next/dynamic";
+
+const ClientProviders = dynamic(() => import("@/components/ClientProviders"), {
+  ssr: false,
+});
 
 export const metadata = {
   title: "Elevate Trust.in",
-  description: "Advanced AI-assisted verifier that detects facial inconsistencies, lip-sync drift, and audio manipulation with confidence.",
+  description:
+    "Advanced AI-assisted verifier that detects facial inconsistencies, lip-sync drift, and audio manipulation with confidence.",
   icons: {
     icon: [
       { url: "/favicons/favicon-96x96.png", sizes: "96x96", type: "image/png" },
@@ -20,12 +24,8 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
-        <AuthProvider>
-          {children}
-          <FloatingChatWidget />
-        </AuthProvider>
+        <ClientProviders>{children}</ClientProviders>
       </body>
     </html>
   );
 }
-
