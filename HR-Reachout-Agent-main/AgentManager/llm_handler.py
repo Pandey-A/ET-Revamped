@@ -1,9 +1,12 @@
 from llama_index.llms.bedrock import Bedrock
 import llama_index.llms.bedrock.utils as bedrock_utils
+import llama_index.llms.bedrock.base as bedrock_base
 from pathlib import Path
 import json
 
-# Monkey-patch get_provider to handle the custom "openai" provider prefix
+# Monkey-patch get_provider to handle the custom "openai" provider prefix.
+# We must patch BOTH bedrock_utils AND bedrock_base because base.py does
+# `from .utils import get_provider` which creates a separate local reference.
 original_get_provider = bedrock_utils.get_provider
 def patched_get_provider(model: str):
     try:
@@ -14,6 +17,7 @@ def patched_get_provider(model: str):
         return bedrock_utils.ProviderType.META.provider
 
 bedrock_utils.get_provider = patched_get_provider
+bedrock_base.get_provider = patched_get_provider
 
 
 # Reading the Bedrock Model config
