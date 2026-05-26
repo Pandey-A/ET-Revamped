@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 
-router.all('/analysis/*', (req, res) => {
+router.all('/analysis/:path*', (req, res) => {
   res.status(503).json({
     success: false,
     code: 'SERVICE_NOT_AVAILABLE',
