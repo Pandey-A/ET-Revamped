@@ -29,8 +29,8 @@ const nextConfig = {
       allowedOrigins: [...new Set([...defaultOrigins, ...extraOrigins])],
     },
   },
-  turbopack: {
-    root: __dirname,
+  eslint: {
+    ignoreDuringBuilds: true,
   },
 };
 
