@@ -1,4 +1,5 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, AsyncIterator, Iterator
+import asyncio
 import logging
 import json
 from datetime import datetime
@@ -112,11 +113,27 @@ class QueryHandler:
             self.logger.error(f"[AgentConfig] Error fetching description for {agent_id}: {e}", exc_info=True)
             return "You are a helpful assistant."
     # === ADD: end helper methods ===
+
+    @staticmethod
+    def _extract_chat_text(chat_response: Any) -> str:
+        if chat_response is None:
+            return ""
+        if hasattr(chat_response, "response") and chat_response.response is not None:
+            return str(chat_response.response)
+        return str(chat_response)
+
+    async def _non_streaming_async_gen(self, text: str) -> AsyncIterator[str]:
+        if text:
+            yield text
+
+    def _non_streaming_sync_gen(self, text: str) -> Iterator[str]:
+        if text:
+            yield text
+
     async def aprocess_query(self,
                       user_input: str,
                       session_id: str,
                       agent_id: Optional[str] = None):
-        import asyncio
         try:
             self.logger.info(f"Processing aquery | session_id={session_id} | agent_id={agent_id} | user_input={user_input}")
 
@@ -180,8 +197,14 @@ class QueryHandler:
             )
             
             chat_history += [ChatMessage(role="system", content=content)]
-            response = await agent.astream_chat(user_input, chat_history)
-            return response.async_response_gen()
+
+            def run_chat():
+                return agent.chat(user_input, chat_history)
+
+            chat_response = await asyncio.to_thread(run_chat)
+            return self._non_streaming_async_gen(
+                self._extract_chat_text(chat_response)
+            )
 
         except Exception as e:
             error_msg = f"Error processing query: {str(e)}"
@@ -265,14 +288,16 @@ class QueryHandler:
             )
             print(f"printing chat history: {chat_history}")
             
-            chat_history+= [ChatMessage(role="system", content=content)]
-            response = agent.stream_chat(user_input, chat_history)
-            print(f"printing response: {response.response_gen}")
-            return response.response_gen
+            chat_history += [ChatMessage(role="system", content=content)]
+            chat_response = agent.chat(user_input, chat_history)
+            return self._non_streaming_sync_gen(
+                self._extract_chat_text(chat_response)
+            )
 
         except Exception as e:
             error_msg = f"Error processing query: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            raise e
 
     async def post_process_query(self, user_query: str, assistant_response: str, session_id: Optional[str] = None, agent_id: Optional[str] = None) -> Dict[str, Any]:
         """

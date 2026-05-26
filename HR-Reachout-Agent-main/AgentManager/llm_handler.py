@@ -4,6 +4,11 @@ import llama_index.llms.bedrock.base as bedrock_base
 from pathlib import Path
 import json
 
+from AgentManager.bedrock_llama3_utils import (
+    completion_to_llama3_prompt,
+    messages_to_llama3_prompt,
+)
+
 # Monkey-patch get_provider to handle the custom "openai" provider prefix.
 # We must patch BOTH bedrock_utils AND bedrock_base because base.py does
 # `from .utils import get_provider` which creates a separate local reference.
@@ -28,6 +33,11 @@ with open(config_path) as config_file:
 _bedrock_cfg = config["Bedrock"]
 
 
+def _is_llama3_model(model_id: str) -> bool:
+    name = (model_id or "").lower()
+    return "llama3" in name or "llama-3" in name
+
+
 class LLMHandler:
     def __init__(self):
         return
@@ -38,11 +48,14 @@ class LLMHandler:
         Credentials are resolved automatically from the EC2 IAM role
         via the default boto3 credential chain — no API keys required.
         """
-        llm = Bedrock(
-            model=model or _bedrock_cfg["model_id"],
-            temperature=temperature or _bedrock_cfg.get("temperature", 0.7),
-            region_name=_bedrock_cfg.get("region", "ap-south-1"),
-            context_size=128000
-            # boto3 picks up IAM role creds automatically
-        )
-        return llm
+        model_id = model or _bedrock_cfg["model_id"]
+        bedrock_kwargs = {
+            "model": model_id,
+            "temperature": temperature or _bedrock_cfg.get("temperature", 0.7),
+            "region_name": _bedrock_cfg.get("region", "ap-south-1"),
+            "context_size": 128000,
+        }
+        if _is_llama3_model(model_id):
+            bedrock_kwargs["messages_to_prompt"] = messages_to_llama3_prompt
+            bedrock_kwargs["completion_to_prompt"] = completion_to_llama3_prompt
+        return Bedrock(**bedrock_kwargs)
