@@ -154,8 +154,33 @@ export async function POST(request) {
       return Response.json({ error: 'Embeds disabled for this agent' }, { status: 403, headers: corsHeaders() });
     }
 
+    // Register / refresh widget session for admin dashboard
+    fetch(`${base}/widget/session/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        agent_id: agentId,
+        origin: request.headers.get('origin') || '',
+        page_url: request.headers.get('referer') || '',
+      }),
+    }).catch(() => {});
+
     const reply = await streamChatToReply(base, message, sessionId, agentId);
-    return Response.json({ reply }, { status: 200, headers: corsHeaders() });
+
+    // Persist turn + escalation analysis (fire-and-forget)
+    fetch(`${base}/chat/analyze_action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_input: message,
+        assistant_response: reply,
+        session_id: sessionId,
+        agent_id: agentId,
+      }),
+    }).catch(() => {});
+
+    return Response.json({ reply, sessionId }, { status: 200, headers: corsHeaders() });
   } catch (e) {
     console.error('[api/widget/chat]', e);
     return Response.json(

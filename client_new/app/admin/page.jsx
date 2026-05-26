@@ -53,6 +53,13 @@ export default function Admin() {
           <p className="admin-kicker">Control Center</p>
           <h1>Admin Dashboard</h1>
           <p>Monitor accounts, review activity, and manage user access from one place.</p>
+          <p style={{ marginTop: 12 }}>
+            <a href="/admin/chat-dashboard/" style={{ color: '#1b5e20', fontWeight: 600 }}>
+              → Open Chat &amp; Leads Dashboard
+            </a>
+            {' '}
+            (widget chats, transcripts, WhatsApp summaries)
+          </p>
         </section>
 
         <AdminPanel />

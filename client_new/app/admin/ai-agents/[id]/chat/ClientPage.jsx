@@ -146,6 +146,16 @@ export default function AgentChatPage() {
       sessionStorage.setItem(storageKey, sid);
     }
     setSessionId(sid);
+    fetch(`${AI_AGENT_API}/widget/session/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sid,
+        agent_id: id,
+        origin: "ai_agent_admin",
+        page_url: typeof window !== "undefined" ? window.location.href : "",
+      }),
+    }).catch(() => {});
   }, [id, agent]);
 
   // ── Load chat history

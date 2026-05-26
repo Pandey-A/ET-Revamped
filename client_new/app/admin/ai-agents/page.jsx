@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { ToastContainer, toast } from "react-toastify";
@@ -367,6 +368,9 @@ export default function AIAgentsPage() {
           <span className="aia-count">
             {agents.length} agent{agents.length !== 1 ? "s" : ""}
           </span>
+          <Link href="/admin/chat-dashboard/" className="aia-btn aia-btn--secondary" style={{ marginRight: 8 }}>
+            📊 Chat Dashboard
+          </Link>
           <button className="aia-create-btn" onClick={() => setCreateOpen(true)}>
             + New Agent
           </button>

@@ -1,16 +1,14 @@
 /**
- * ElevateTrust embeddable chat widget (vanilla JS).
- * Usage:
- *   <script src="https://YOUR_APP_ORIGIN/widget.js"
- *     data-agent-id="agent_..."
- *     data-chatbot-name="Support"
- *     data-theme="#2563eb"
- *     data-logo="https://..."
- *     data-welcome="Hi!"
- *     data-starters="Q1|Q2"
- *     data-position="bottom-right"
- *     data-api-base="https://YOUR_APP_ORIGIN"  (optional; defaults to script host)
- *   ></script>
+ * ElevateTrust embeddable website widget.
+ * Tracks sessions on the admin dashboard; sends WhatsApp summary after ~1.5–2 min inactivity.
+ *
+ * <script src="https://YOUR_APP/widget.js"
+ *   data-agent-id="agent_..."
+ *   data-chatbot-name="Support"
+ *   data-theme="#1B5E20"
+ *   data-inactivity-ms="90000"
+ *   data-api-base="https://YOUR_APP"
+ * ></script>
  */
 (function () {
   var sc = document.currentScript;
@@ -30,35 +28,113 @@
     try {
       apiBase = new URL(sc.src).origin;
     } catch (e) {
-      console.error('[ET Widget] Invalid script src / could not resolve API origin');
+      console.error('[ET Widget] Invalid script src');
       return;
     }
   }
   apiBase = apiBase.replace(/\/$/, '');
 
   var chatbotName = sc.getAttribute('data-chatbot-name') || 'Assistant';
-  var logo = sc.getAttribute('data-logo') || '';
-  var theme = sc.getAttribute('data-theme') || '#2563eb';
-  var welcome = sc.getAttribute('data-welcome') || 'How can we help?';
+  var logo = (sc.getAttribute('data-logo') || '').trim();
+  if (!logo) logo = apiBase + '/chatops-icon.png';
+  var theme = sc.getAttribute('data-theme') || '#1B5E20';
+  var welcome = sc.getAttribute('data-welcome') || 'Hi! How can we help you today?';
   var position = sc.getAttribute('data-position') === 'bottom-left' ? 'bottom-left' : 'bottom-right';
   var startersRaw = sc.getAttribute('data-starters') || '';
+  var inactivityMs = parseInt(sc.getAttribute('data-inactivity-ms') || '90000', 10);
+  if (inactivityMs < 60000) inactivityMs = 90000;
+  if (inactivityMs > 120000) inactivityMs = 120000;
+
   var starters = startersRaw
-    ? startersRaw.split('|').map(function (s) {
-        return s.trim();
-      }).filter(Boolean)
+    ? startersRaw.split('|').map(function (s) { return s.trim(); }).filter(Boolean)
     : [];
 
   var sidKey = 'et_widget_session_' + agentId;
+  var completedKey = 'et_widget_done_' + agentId;
+
   function getSessionId() {
     try {
+      if (localStorage.getItem(completedKey) === '1') {
+        localStorage.removeItem(sidKey);
+        localStorage.removeItem(completedKey);
+      }
       var x = localStorage.getItem(sidKey);
       if (x) return x;
     } catch (e) {}
-    var id = 'w_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    var id = 'widget_' + agentId + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     try {
       localStorage.setItem(sidKey, id);
     } catch (e2) {}
     return id;
+  }
+
+  var sessionId = getSessionId();
+  var userMsgCount = 0;
+  var chatCompleted = false;
+  var inactivityTimer = null;
+  var contact = { name: '', email: '', phone: '' };
+  var showContactForm = false;
+
+  function resetInactivityTimer() {
+    if (chatCompleted) return;
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(completeChat, inactivityMs);
+  }
+
+  function apiPost(path, body) {
+    return fetch(apiBase + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); });
+  }
+
+  function startSession() {
+    apiPost('/api/widget/session', {
+      agentId: agentId,
+      sessionId: sessionId,
+      origin: window.location.origin,
+      pageUrl: window.location.href,
+    }).catch(function () {});
+  }
+
+  function saveContact() {
+    if (!contact.name && !contact.email && !contact.phone) return;
+    apiPost('/api/widget/contact', {
+      sessionId: sessionId,
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+    }).catch(function () {});
+  }
+
+  function completeChat(reason) {
+    if (chatCompleted) return;
+    chatCompleted = true;
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    saveContact();
+    apiPost('/api/widget/complete', { sessionId: sessionId, reason: reason || 'inactivity' })
+      .then(function () {
+        try {
+          localStorage.setItem(completedKey, '1');
+        } catch (e) {}
+        addBubble('This chat has ended. Our team will follow up if you shared your details. Thank you!', 'assistant');
+        inp.disabled = true;
+        send.disabled = true;
+      })
+      .catch(function () {});
+  }
+
+  function tryParseContact(text) {
+    var t = text.trim();
+    var emailM = t.match(/[\w.+-]+@[\w.-]+\.\w+/);
+    var phoneM = t.match(/\+?[\d\s()-]{8,}/);
+    if (emailM) contact.email = emailM[0];
+    if (phoneM) contact.phone = phoneM[0].trim();
+    if (!contact.name && t.length < 60 && !emailM && !phoneM && t.split(' ').length <= 4) {
+      contact.name = t;
+    }
+    if (contact.name || contact.email || contact.phone) saveContact();
   }
 
   var corner = position === 'bottom-left' ? 'left:16px;' : 'right:16px;';
@@ -72,11 +148,8 @@
   fab.type = 'button';
   fab.setAttribute('aria-label', 'Open chat');
   fab.style.cssText =
-    'pointer-events:auto;position:fixed;bottom:20px;' +
-    corner +
-    'width:56px;height:56px;border-radius:9999px;border:none;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;background:' +
-    theme +
-    ';';
+    'pointer-events:auto;position:fixed;bottom:20px;' + corner +
+    'width:56px;height:56px;border-radius:9999px;border:none;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;background:' + theme + ';';
 
   if (logo) {
     var img = document.createElement('img');
@@ -85,96 +158,86 @@
     img.style.cssText = 'width:36px;height:36px;border-radius:9999px;object-fit:cover;background:#fff;';
     fab.appendChild(img);
   } else {
-    fab.innerHTML = '<span style="font-size:18px;font-weight:700;color:#fff">?</span>';
+    fab.innerHTML = '<span style="font-size:18px;font-weight:700;color:#fff">💬</span>';
   }
 
   var panel = document.createElement('div');
-  panel.setAttribute('role', 'dialog');
   panel.style.cssText =
-    'pointer-events:auto;display:none;flex-direction:column;position:fixed;bottom:20px;' +
-    corner +
-    'width:min(100vw - 32px, 380px);max-height:min(72vh, 520px);height:min(72vh, 520px);background:#fff;border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.18);border:1px solid rgba(0,0,0,.08);overflow:hidden;';
+    'pointer-events:auto;display:none;flex-direction:column;position:fixed;bottom:88px;' + corner +
+    'width:min(100vw - 32px, 400px);max-height:min(78vh, 560px);height:min(78vh, 560px);background:#fff;border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.18);border:1px solid rgba(0,0,0,.08);overflow:hidden;';
 
   var header = document.createElement('div');
-  header.style.cssText =
-    'display:flex;align-items:center;justify-content:space-between;padding:10px 12px;color:#fff;background:' +
-    theme +
-    ';';
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 14px;color:#fff;background:' + theme + ';';
 
   var headLeft = document.createElement('div');
   headLeft.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;';
-  if (logo) {
-    var av = document.createElement('img');
-    av.src = logo;
-    av.alt = '';
-    av.style.cssText = 'width:36px;height:36px;border-radius:9999px;object-fit:cover;background:#fff;flex-shrink:0;';
-    headLeft.appendChild(av);
-  } else {
-    headLeft.innerHTML =
-      '<div style="width:36px;height:36px;border-radius:9999px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">AI</div>';
-  }
-  var titles = document.createElement('div');
-  titles.style.cssText = 'min-width:0;';
-  titles.innerHTML =
-    '<div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
-    escapeHtml(chatbotName) +
-    '</div><div style="font-size:11px;opacity:.9">Online</div>';
-  headLeft.appendChild(titles);
+  headLeft.innerHTML =
+    '<div style="width:36px;height:36px;border-radius:9999px;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">AI</div>' +
+    '<div style="min-width:0"><div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(chatbotName) + '</div>' +
+    '<div style="font-size:11px;opacity:.9">Online</div></div>';
 
-  var headBtns = document.createElement('div');
-  headBtns.style.cssText = 'display:flex;gap:2px;flex-shrink:0;';
-  function btn(label, svgPath) {
-    var b = document.createElement('button');
-    b.type = 'button';
-    b.setAttribute('aria-label', label);
-    b.style.cssText =
-      'background:transparent;border:none;color:#fff;cursor:pointer;padding:6px;border-radius:8px;line-height:0;';
-    b.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="' +
-      svgPath +
-      '"/></svg>';
-    return b;
-  }
-  var minBtn = btn('Minimize', 'M6 12h12');
-  var closeBtn = btn('Close', 'M6 6l12 12M18 6L6 18');
-  function closePanel() {
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.style.cssText = 'background:transparent;border:none;color:#fff;cursor:pointer;padding:6px;font-size:18px;';
+  closeBtn.textContent = '×';
+  closeBtn.onclick = function () {
     panel.style.display = 'none';
     fab.style.display = 'flex';
-  }
-  minBtn.onclick = closePanel;
-  closeBtn.onclick = closePanel;
-  headBtns.appendChild(minBtn);
-  headBtns.appendChild(closeBtn);
+    if (userMsgCount > 0) completeChat('user_closed');
+  };
   header.appendChild(headLeft);
-  header.appendChild(headBtns);
+  header.appendChild(closeBtn);
 
   var body = document.createElement('div');
-  body.style.cssText =
-    'flex:1;min-height:0;overflow-y:auto;padding:12px;font-size:13px;color:#404040;display:flex;flex-direction:column;';
+  body.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:12px;font-size:13px;color:#404040;display:flex;flex-direction:column;';
 
   var msgs = document.createElement('div');
   msgs.style.cssText = 'display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;';
 
+  var contactForm = document.createElement('div');
+  contactForm.style.cssText = 'display:none;padding:10px;background:#f1f8f1;border-radius:12px;margin-top:8px;';
+  contactForm.innerHTML =
+    '<div style="font-weight:600;font-size:12px;margin-bottom:8px;color:#1B5E20">Share your details (optional)</div>';
+  ['name', 'email', 'phone'].forEach(function (field) {
+    var inpF = document.createElement('input');
+    inpF.type = field === 'email' ? 'email' : field === 'phone' ? 'tel' : 'text';
+    inpF.placeholder = field === 'name' ? 'Your name' : field === 'email' ? 'Email' : 'Phone';
+    inpF.style.cssText = 'width:100%;margin-bottom:6px;padding:8px;border:1px solid #ddd;border-radius:8px;font-size:12px;box-sizing:border-box;';
+    inpF.dataset.field = field;
+    inpF.oninput = function () {
+      contact[field] = inpF.value.trim();
+      saveContact();
+    };
+    contactForm.appendChild(inpF);
+  });
+  var contactSubmit = document.createElement('button');
+  contactSubmit.type = 'button';
+  contactSubmit.textContent = 'Submit details';
+  contactSubmit.style.cssText = 'width:100%;padding:8px;border:none;border-radius:8px;background:' + theme + ';color:#fff;font-weight:600;cursor:pointer;font-size:12px;';
+  contactSubmit.onclick = function () {
+    saveContact();
+    contactForm.style.display = 'none';
+    addBubble('Thanks! We have your details. Any other questions before we wrap up?', 'assistant');
+  };
+  contactForm.appendChild(contactSubmit);
+
   var inputRow = document.createElement('div');
-  inputRow.style.cssText =
-    'display:flex;gap:8px;padding:10px 12px;border-top:1px solid #eee;flex-shrink:0;align-items:center;';
+  inputRow.style.cssText = 'display:flex;gap:8px;padding:10px 12px;border-top:1px solid #eee;flex-shrink:0;align-items:center;';
   var inp = document.createElement('input');
   inp.type = 'text';
   inp.placeholder = 'Type a message…';
-  inp.style.cssText =
-    'flex:1;min-width:0;border:1px solid #e5e5e5;border-radius:10px;padding:8px 10px;font-size:13px;outline:none;';
+  inp.style.cssText = 'flex:1;min-width:0;border:1px solid #e5e5e5;border-radius:10px;padding:8px 10px;font-size:13px;outline:none;';
   var send = document.createElement('button');
   send.type = 'button';
   send.textContent = 'Send';
-  send.style.cssText =
-    'flex-shrink:0;border:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;color:#fff;cursor:pointer;background:' +
-    theme +
-    ';';
+  send.style.cssText = 'flex-shrink:0;border:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;color:#fff;cursor:pointer;background:' + theme + ';';
   inputRow.appendChild(inp);
   inputRow.appendChild(send);
 
   panel.appendChild(header);
   body.appendChild(msgs);
+  body.appendChild(contactForm);
   panel.appendChild(body);
   panel.appendChild(inputRow);
 
@@ -183,11 +246,7 @@
   document.body.appendChild(root);
 
   function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function addBubble(text, role) {
@@ -195,8 +254,8 @@
     wrap.style.cssText = 'display:flex;justify-content:' + (role === 'user' ? 'flex-end' : 'flex-start') + ';';
     var b = document.createElement('div');
     b.style.cssText =
-      'max-width:85%;padding:8px 10px;border-radius:14px;font-size:13px;line-height:1.45;white-space:pre-wrap;word-break:break-word;' +
-      (role === 'user' ? 'background:#171717;color:#fff;' : 'background:#f4f4f5;color:#171717;');
+      'max-width:88%;padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.45;white-space:pre-wrap;word-break:break-word;' +
+      (role === 'user' ? 'background:' + theme + ';color:#fff;' : 'background:#f4f4f5;color:#171717;');
     b.textContent = text;
     wrap.appendChild(b);
     msgs.appendChild(wrap);
@@ -227,14 +286,23 @@
   function setLoading(on) {
     loading = on;
     send.disabled = on;
-    inp.disabled = on;
+    inp.disabled = on || chatCompleted;
   }
 
   function doSend() {
     var text = (inp.value || '').trim();
-    if (!text || loading) return;
+    if (!text || loading || chatCompleted) return;
     inp.value = '';
     addBubble(text, 'user');
+    userMsgCount += 1;
+    tryParseContact(text);
+    resetInactivityTimer();
+
+    if (userMsgCount === 3 && !showContactForm) {
+      showContactForm = true;
+      contactForm.style.display = 'block';
+    }
+
     setLoading(true);
     var think = document.createElement('div');
     think.id = 'et-widget-thinking';
@@ -243,30 +311,26 @@
     msgs.appendChild(think);
     body.scrollTop = body.scrollHeight;
 
-    fetch(apiBase + '/api/widget/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agentId: agentId,
-        message: text,
-        sessionId: getSessionId(),
-      }),
+    apiPost('/api/widget/chat', {
+      agentId: agentId,
+      message: text,
+      sessionId: sessionId,
     })
-      .then(function (r) {
-        return r.json().then(function (j) {
-          return { ok: r.ok, j: j };
-        });
-      })
-      .then(function (_ref) {
+      .then(function (ref) {
         var t = document.getElementById('et-widget-thinking');
         if (t) t.remove();
-        var reply = _ref.j && typeof _ref.j.reply === 'string' ? _ref.j.reply : null;
-        if (!_ref.ok || !reply) {
-          var err = (_ref.j && _ref.j.error) || 'Request failed';
-          addBubble(String(err), 'assistant');
+        var reply = ref.j && typeof ref.j.reply === 'string' ? ref.j.reply : null;
+        if (ref.j && ref.j.sessionId) sessionId = ref.j.sessionId;
+        if (!ref.ok || !reply) {
+          addBubble((ref.j && ref.j.error) || 'Request failed', 'assistant');
           return;
         }
         addBubble(reply, 'assistant');
+        resetInactivityTimer();
+        var low = reply.toLowerCase();
+        if (low.indexOf('mark this chat') >= 0 || low.indexOf('chat is complete') >= 0 || low.indexOf('chat complete') >= 0) {
+          setTimeout(function () { completeChat('agent_closed'); }, 3000);
+        }
       })
       .catch(function () {
         var t2 = document.getElementById('et-widget-thinking');
@@ -293,6 +357,8 @@
     if (!msgs.dataset.seeded) {
       msgs.dataset.seeded = '1';
       renderEmpty();
+      startSession();
+      resetInactivityTimer();
     }
     inp.focus();
   };
