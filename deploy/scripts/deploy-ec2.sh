@@ -150,7 +150,7 @@ sudo -u ubuntu env $(grep -v '^#' "${ENV_FILE}" | xargs) npm run db:migrate
 echo "==> Build Next.js (standalone)"
 cd "${APP_DIR}/client_new"
 # Next reads NEXT_PUBLIC_* at build time
-sudo -u ubuntu env $(grep -v '^#' "${ENV_FILE}" | grep -v '^NODE_ENV=' | xargs) NODE_ENV=production npm ci
+sudo -u ubuntu env $(grep -v '^#' "${ENV_FILE}" | grep -v '^NODE_ENV=' | xargs) NODE_ENV=production npm ci --include=dev
 sudo -u ubuntu env $(grep -v '^#' "${ENV_FILE}" | grep -v '^NODE_ENV=' | xargs) NODE_ENV=production npm run build
 rm -rf .next/standalone/public .next/standalone/.next/static 2>/dev/null || true
 cp -r public .next/standalone/public
