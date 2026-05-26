@@ -52,6 +52,6 @@ openpyxl
 # Utilities
 pyyaml
 jinja2
-llama-index-llms-bedrock==0.3.0
-llama-index-embeddings-bedrock==0.3.0
+llama-index-llms-bedrock
+llama-index-embeddings-bedrock
 boto3==1.34.140
