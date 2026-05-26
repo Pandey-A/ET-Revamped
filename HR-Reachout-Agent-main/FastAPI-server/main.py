@@ -325,18 +325,9 @@ async def capture_lead(request: Request):
         try:
             chat_history = chat_history_handler.get_formatted_history(session_id)
             if chat_history and chat_history.strip():
-                # Load OpenAI key from config
-                try:
-                    with open("AgentManager/config.json", "r") as f:
-                        config_data = json.load(f)
-                    openai_key = config_data.get("OpenAI", {}).get("Key")
-                    if openai_key:
-                        os.environ["OPENAI_API_KEY"] = openai_key
-                except Exception as e:
-                    logging.warning(f"Could not load OpenAI key from config: {e}")
-
-                from llama_index.llms.openai import OpenAI
-                summary_llm = OpenAI(model="gpt-4o-mini", temperature=0.3)
+                # Use Bedrock via llm_handler
+                from AgentManager import llm_handler
+                summary_llm = llm_handler.get_llm()
                 summary_prompt = (
                     f"Summarize this customer conversation in 3-4 bullet points. "
                     f"Focus on what the user was interested in and any key details:\n\n{chat_history}"
@@ -1142,11 +1133,8 @@ def _generate_conversation_summary(session_id: str) -> str:
         chat_history = chat_history_handler.get_formatted_history(session_id)
         if not chat_history or not chat_history.strip():
             return "No conversation history available."
-        openai_key = config.get("OpenAI", {}).get("Key")
-        if openai_key:
-            os.environ["OPENAI_API_KEY"] = openai_key
-        from llama_index.llms.openai import OpenAI
-        summary_llm = OpenAI(model="gpt-4o-mini", temperature=0.3)
+        from AgentManager import llm_handler
+        summary_llm = llm_handler.get_llm()
         summary_prompt = (
             "Summarize this website widget customer conversation in 3-5 bullet points. "
             "Include what they asked, any products/services discussed, and contact details if mentioned:\n\n"

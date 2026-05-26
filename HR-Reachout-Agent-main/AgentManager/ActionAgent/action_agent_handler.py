@@ -5,7 +5,6 @@ import json
 from .function_handler import FunctionHandler
 from .tool_handler import ToolHandler
 from AgentManager import instruction_handler, llm_handler, chat_history_handler
-from llama_index.llms.openai import OpenAI
 from llama_index.core.llms import ChatMessage, MessageRole
 from datetime import datetime
 from .jira_handler import save_ticket_locally
@@ -30,9 +29,8 @@ try:
 except Exception as e:
     raise RuntimeError(f"Failed to load required configuration from config.json: {str(e)}")
 
-model = config['OpenAI']['model']
-temperature = config['OpenAI']['temperature']
-llm = llm_handler.get_llm(model, temperature)
+bedrock_cfg = config['Bedrock']
+llm = llm_handler.get_llm(bedrock_cfg['model_id'], bedrock_cfg.get('temperature', 0.7))
 
 
 
@@ -43,7 +41,6 @@ class ActionAgentHandler:
         self.tool_handler = ToolHandler(self.function_handler)
         self.tools = self.tool_handler.get_tools()
         self.system_prompt = instruction_handler.Action_agent_prompt
-        # llm.system_prompt = self.system_prompt.template
         self.chat_history_handler = chat_history_handler
         self.message = "Thanks for reaching out. Your query is registered. Our human expert will reach out to you shortly."
         logging.info(f"Initialized ActionAgent with {len(self.tools)} tools")
@@ -83,9 +80,6 @@ class ActionAgentHandler:
     def generate_summary(self, session_id: str, chat_history: str) -> str:
 
         raw_history = self.chat_history_handler.get_chat_history(session_id)
-        # print("\n\nRaw History: ", raw_history)
-
-        # print("\n\nFormatted Chat History for Summarization: ", chat_history)
 
         prompt = f"""
             Please summarize the following chat history in a concise and clear manner
@@ -103,112 +97,106 @@ class ActionAgentHandler:
         print("\n\nResponse: ", response)
         return response.text.strip()
 
-    def process_user_input(self, session_id: str) -> dict:
-        content = self.system_prompt.template
-        chat_history = self.chat_history_handler.get_chat_history(session_id)
-        system_message = ChatMessage(role=MessageRole.SYSTEM, content=content)
-        temp_history = [system_message] + chat_history
+    def _should_escalate(self, chat_history_messages) -> bool:
+        """Use the LLM to decide if the conversation needs human escalation.
 
+        Instead of OpenAI-specific chat_with_tools, we use a simple prompt-based
+        approach that works with any LLM (including Bedrock OSS models).
+        """
+        content = self.system_prompt.template
+        system_message = ChatMessage(role=MessageRole.SYSTEM, content=content)
+        temp_history = [system_message] + chat_history_messages
+
+        # Build a text prompt asking the LLM to decide
+        decision_prompt = (
+            "Based on the conversation above, should this conversation be escalated "
+            "to a human agent? Consider if the user explicitly asked for a human, "
+            "if the AI cannot answer their question, or if there is frustration.\n\n"
+            "Reply with ONLY one word: ESCALATE or NO_ESCALATE"
+        )
+        temp_history.append(ChatMessage(role=MessageRole.USER, content=decision_prompt))
+
+        try:
+            response = self.llm.chat(temp_history)
+            decision = response.message.content.strip().upper()
+            logging.info(f"Escalation decision: {decision}")
+            return "ESCALATE" in decision
+        except Exception as e:
+            logging.error(f"Error during escalation decision: {type(e).__name__}: {e}")
+            return False
+
+    def process_user_input(self, session_id: str) -> dict:
+        chat_history = self.chat_history_handler.get_chat_history(session_id)
         formatted_history = self.chat_history_handler.get_formatted_history(session_id)
         print("\n\n[DEBUG] Formatted History for LLM: \n", formatted_history)
 
-        try:
-            response = self.llm.chat_with_tools(
-                tools=self.tools,
-                chat_history=temp_history,
-                allow_parallel_tool_calls=True,
-                verbose=True,
-            )
-        except Exception as e:
-            logging.error(f"Error during LLM processing: {type(e).__name__}: {e}")
-            return {"success": False, "error": f"LLM processing failed: {str(e)}"}
+        # Use prompt-based escalation decision instead of chat_with_tools
+        should_escalate = self._should_escalate(chat_history)
 
-        tool_map = {tool.metadata.name: tool.fn for tool in self.tools}
-        tool_calls = response.message.additional_kwargs.get("tool_calls", [])
+        if not should_escalate:
+            return {"success": False, "error": "No escalation needed"}
 
-        logging.info("\n\nLLM DECISION DEBUG: ")
-        logging.info(f"Response Message: {response.message.content}")
-        logging.info(f"Tool Calls Found: {tool_calls}")
-
-        if not tool_calls:
-            return {"success": False, "error": "No tools called by LLM"}
-
+        # Proceed with Telegram escalation
         final_response = {"success": False}
 
-        for tool_call in tool_calls:
-            tool_name = tool_call.function.name
-            tool_func = tool_map.get(tool_name)
+        try:
+            with open(TICKET_STORE_PATH, "r") as f:
+                tickets = json.load(f)
 
-            if not tool_func:
-                logging.error(f"Tool {tool_name} not found in tool_map")
-                continue
+            # hard coding for now, later logic needs to be added
+            bot_token = "8706315248:AAH-pAO4B_LohsrKQNPD-2ONhsnMVVXFZPU"
 
-            try:
-                args = tool_call.function.arguments
-                try:
-                    if isinstance(args, str):
-                        args = json.loads(args)
-                    elif not isinstance(args, dict):
-                        raise ValueError(f"Tool arguments must be a dict or JSON string, got: {type(args)}")
-                except Exception as e:
-                    logging.error(f"Failed to parse arguments for tool {tool_name}: {args} — {type(e).__name__}: {e}")
-                    final_response.setdefault("errors", []).append(f"Invalid args for {tool_name}: {str(e)}")
-                    continue  # Skip this tool call
+            if not bot_token:
+                raise Exception("No available Telegram bots for escalation")
 
+            self.tool_handler.set_bot_token(bot_token)
+            logging.info(f"Selected Telegram bot for escalation: {bot_token}")
+            self.chat_history_handler.add_message(session_id, "assistant", self.message)
 
-                if tool_name == "human_agent":
+            # Send only the summary instead of full chat history to telegram bot
+            summary = self.generate_summary(session_id, formatted_history)
 
-                    with open(TICKET_STORE_PATH, "r") as f:
-                        tickets = json.load(f)
+            message = f"sessionId : {session_id} \n\n Summary : {summary}"
 
-                    # hard coding for now, later logic needs to be added
-                    bot_token = "8706315248:AAH-pAO4B_LohsrKQNPD-2ONhsnMVVXFZPU"
+            # Find and call the human_agent tool
+            tool_map = {tool.metadata.name: tool.fn for tool in self.tools}
+            human_agent_fn = tool_map.get("human_agent")
 
-                    if not bot_token:
-                        raise Exception("No available Telegram bots for escalation")
+            if human_agent_fn:
+                tool_args = {
+                    "message": message,
+                    "session_id": session_id,
+                    "bot_token": bot_token
+                }
 
-                    self.tool_handler.set_bot_token(bot_token)
-                    logging.info(f"Selected Telegram bot for escalation: {bot_token}")
-                    self.chat_history_handler.add_message(session_id, "assistant", self.message)
+                print("-"*15)
+                print("Telegram tool arguments: \n")
+                print(tool_args)
+                print("-"*15)
 
-                    # Send only the summary instead of full chat history to telegram bot
-                    summary = self.generate_summary(session_id, formatted_history)
+                result = human_agent_fn(tool_args)
+                if isinstance(result, str):
+                    parsed_result = json.loads(result)
+                else:
+                    parsed_result = result
 
-                    message = f"sessionId : {session_id} \n\n Summary : {summary}"
+                chat_id = parsed_result.get("chat_id", None)
+                status = parsed_result.get("status", "").lower()
+                final_response["telegram_msg_success"] = status == "success"
 
-                    tool_args = {
-                        "message": message,
-                        "session_id": session_id,
-                        "bot_token": bot_token
-                    }
+                self.create_telegram_ticket(session_id, chat_id, bot_token, summary=summary)
 
-                    print("-"*15)
-                    print("Telegram tool arguments: \n")
-                    print(tool_args)
-                    print("-"*15)
-
-                    result = tool_func(tool_args)
-                    if isinstance(result, str):
-                        parsed_result = json.loads(result)
-                    else:
-                        parsed_result = result
-
-                    chat_id = parsed_result.get("chat_id", None)
-                    status = parsed_result.get("status", "").lower()
-                    final_response["telegram_msg_success"] = status == "success"
-
-                    self.create_telegram_ticket(session_id, chat_id, bot_token, summary=summary)
-
-                    logging.info(f"Tool {tool_name} result: {parsed_result}")
-
+                logging.info(f"Tool human_agent result: {parsed_result}")
                 final_response["success"] = True
+            else:
+                logging.error("human_agent tool not found in tool_map")
 
-            except json.JSONDecodeError as e:
-                logging.error(f"Invalid JSON in tool call arguments for {tool_name}: {tool_call.function.arguments}")
-                final_response.setdefault("errors", []).append(f"Invalid JSON for {tool_name}: {str(e)}")
-            except Exception as e:
-                logging.error(f"Error executing tool {tool_name}: {type(e).__name__}: {e}")
-                final_response.setdefault("errors", []).append(f"Error in {tool_name}: {str(e)}")
+        except json.JSONDecodeError as e:
+            logging.error(f"Invalid JSON in ticket store: {e}")
+            final_response.setdefault("errors", []).append(f"JSON error: {str(e)}")
+        except Exception as e:
+            logging.error(f"Error executing escalation: {type(e).__name__}: {e}")
+            final_response.setdefault("errors", []).append(f"Error: {str(e)}")
 
         if not final_response.get("telegram_msg_success"):
             logging.warning("Telegram tool was not successfully executed")

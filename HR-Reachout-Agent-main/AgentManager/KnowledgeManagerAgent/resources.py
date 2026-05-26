@@ -8,7 +8,7 @@ from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.weaviate import WeaviateVectorStore
 from llama_index.readers.web import SimpleWebPageReader
-from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.embeddings.bedrock import BedrockEmbedding
 
 
 def _load_config(path='AgentManager/config.json'):
@@ -53,13 +53,19 @@ def _connect_weaviate(config):
     return client
 
 
+def _get_embed_model(config):
+    """Create a BedrockEmbedding instance using the IAM role credentials."""
+    bedrock_cfg = config['Bedrock']
+    return BedrockEmbedding(
+        model_name=bedrock_cfg.get('embed_model_id', 'amazon.titan-embed-text-v2:0'),
+        region_name=bedrock_cfg.get('region', 'ap-south-1'),
+    )
+
+
 class WebPageIndexer:
     def __init__(self, config_path='AgentManager/config.json'):
         self.config = _load_config(config_path)
-        self.embed_model = OpenAIEmbedding(
-            model=self.config['OpenAI']['embed_model'],
-            api_key=self.config['OpenAI']['Key'],
-        )
+        self.embed_model = _get_embed_model(self.config)
         self.weaviate_client = _connect_weaviate(self.config)
         self.splitter = SentenceSplitter(
             chunk_size=1024,
@@ -116,10 +122,7 @@ class WebPageIndexer:
 class PDFIndexer:
     def __init__(self, config_path='AgentManager/config.json'):
         self.config = _load_config(config_path)
-        self.embed_model = OpenAIEmbedding(
-            model=self.config['OpenAI']['embed_model'],
-            api_key=self.config['OpenAI']['Key'],
-        )
+        self.embed_model = _get_embed_model(self.config)
         self.weaviate_client = _connect_weaviate(self.config)
         self.splitter = SentenceSplitter(
             chunk_size=1024,

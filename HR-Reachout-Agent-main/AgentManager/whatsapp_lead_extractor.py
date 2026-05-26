@@ -5,8 +5,7 @@ from datetime import datetime
 import pandas as pd
 import requests
 
-from llama_index.llms.openai import OpenAI
-from AgentManager import chat_history_handler
+from AgentManager import chat_history_handler, llm_handler
 from AgentManager.whatsapp_handler import whatsapp_api
 
 logger = logging.getLogger(__name__)
@@ -103,18 +102,10 @@ def extract_and_save_lead(
     if not chat_history or len(chat_history.strip()) < 20:
         return
 
-    # Load OpenAI key
     try:
-        with open("AgentManager/config.json", "r") as f:
-            config_data = json.load(f)
-        openai_key = config_data.get("OpenAI", {}).get("Key")
-        if openai_key:
-            os.environ["OPENAI_API_KEY"] = openai_key
-    except Exception as e:
-        logger.warning(f"Could not load OpenAI key for extraction: {e}")
-
-    try:
-        llm = OpenAI(model="gpt-4o-mini", temperature=0.1)
+        # Get central Bedrock LLM from llm_handler
+        llm = llm_handler.get_llm()
+        
         prompt = (
             "Analyze the following conversation history.\n"
             "Extract the user's name and email if both have been explicitly provided by the user.\n"

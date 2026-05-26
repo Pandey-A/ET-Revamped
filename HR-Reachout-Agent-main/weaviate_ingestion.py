@@ -11,28 +11,32 @@ from llama_index.core import (
     Document
 )
 from llama_index.core.node_parser import SemanticSplitterNodeParser
-from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.bedrock import BedrockEmbedding
+from llama_index.llms.bedrock import Bedrock
+import json
 
 from llama_index.vector_stores.weaviate import WeaviateVectorStore
 
 from dotenv import load_dotenv
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 WEAVIATE_URL = os.getenv("WEAVIATE_URL")
 
 print("✅ credentials imported")
 
-embed_model = OpenAIEmbedding(
-    model="text-embedding-3-small",
-    api_key=OPENAI_API_KEY,
+with open("AgentManager/config.json", "r") as f:
+    config = json.load(f)
+bedrock_cfg = config.get("Bedrock", {})
+
+embed_model = BedrockEmbedding(
+    model_name=bedrock_cfg.get("embed_model_id", "amazon.titan-embed-text-v2:0"),
+    region_name=bedrock_cfg.get("region", "ap-south-1")
 )
 
-llm = OpenAI(
-    model="gpt-4o-mini",
-    api_key=OPENAI_API_KEY,
+llm = Bedrock(
+    model=bedrock_cfg.get("model_id", "gpt-oss-120b"),
+    region_name=bedrock_cfg.get("region", "ap-south-1")
 )
 
 # weaviate_client = weaviate.connect_to_weaviate_cloud(

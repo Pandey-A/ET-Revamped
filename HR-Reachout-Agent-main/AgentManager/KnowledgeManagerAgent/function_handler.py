@@ -3,10 +3,9 @@ import json
 import weaviate
 from weaviate.classes.init import AdditionalConfig, Timeout
 
-from llama_index.llms.openai import OpenAI
-from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core import Document, VectorStoreIndex, StorageContext
 from llama_index.vector_stores.weaviate import WeaviateVectorStore
+from llama_index.embeddings.bedrock import BedrockEmbedding
 
 from typing import Optional, Dict, Any
 import cohere
@@ -16,10 +15,10 @@ import cohere
 with open("AgentManager/config.json", "r") as config_file:
     config = json.load(config_file)
 
-openai_key = config["OpenAI"]["Key"]
 weaviate_url = config["weaviate"]["url"]
 weaviate_api_key = config["weaviate"].get("api_key", None)
 cohere_api_key = config["cohere"]["api_key"]
+bedrock_cfg = config.get("Bedrock", {})
 
 os.environ["COHERE_API_KEY"] = cohere_api_key
 co = cohere.Client()
@@ -76,9 +75,9 @@ def _to_weaviate_class(collection_name: str) -> str:
 class RAG:
     def __init__(self, top_k: int = 5):
         self.top_k = top_k
-        self.embed_model = OpenAIEmbedding(
-            model="text-embedding-3-small",
-            api_key=openai_key
+        self.embed_model = BedrockEmbedding(
+            model_name=bedrock_cfg.get('embed_model_id', 'amazon.titan-embed-text-v2:0'),
+            region_name=bedrock_cfg.get('region', 'ap-south-1'),
         )
         self.weaviate_client = _connect_weaviate()
 
