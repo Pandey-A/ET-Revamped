@@ -130,6 +130,7 @@ if [[ ! -f "${REQ_FILE}" ]]; then
 fi
 LINUX_REQ="$(mktemp)"
 grep -vE '^(pywin32|pyreadline3)==' "${REQ_FILE}" > "${LINUX_REQ}"
+chmod 644 "${LINUX_REQ}"
 sudo -u ubuntu .venv/bin/pip install -q -r "${LINUX_REQ}"
 rm -f "${LINUX_REQ}"
 sudo -u ubuntu .venv/bin/pip install -q gunicorn 'uvicorn[standard]'
