@@ -97,7 +97,6 @@ const Navbar = () => {
           <div className="hidden items-center gap-8 md:flex">
             <a href="/" className="text-sm font-light text-black transition-colors hover:opacity-70">Home</a>
             <a href="/documentation/" className="text-sm font-light text-black transition-colors hover:opacity-70">Features</a>
-            <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
             <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
             <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
             <a href="/admin/whatsapp-channels/" className="text-sm font-light text-black transition-colors hover:opacity-70">WhatsApp</a>
@@ -130,7 +129,6 @@ const Navbar = () => {
         >
           <a href="/" onClick={closeMobile} className="text-base font-medium text-black">Home</a>
           <a href="/documentation/" onClick={closeMobile} className="text-base font-medium text-black">Features</a>
-          <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
           <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
           <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
           <a href="/admin/whatsapp-channels/" onClick={closeMobile} className="text-base font-medium text-black">WhatsApp</a>
