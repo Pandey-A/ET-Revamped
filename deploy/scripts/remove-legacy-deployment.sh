@@ -9,7 +9,13 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "==> Stop legacy systemd services"
-bash "$(dirname "$0")/stop-legacy-services.sh" || true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STOP_LEGACY="${SCRIPT_DIR}/stop-legacy-services.sh"
+if [[ -f "${STOP_LEGACY}" ]]; then
+  bash "${STOP_LEGACY}" || true
+else
+  curl -fsSL "https://raw.githubusercontent.com/Pandey-A/ET-Revamped/feature/chatops-deploy/deploy/scripts/stop-legacy-services.sh" | bash || true
+fi
 
 echo "==> Stop anything listening on app ports 8000-8003"
 for port in 8000 8001 8002 8003; do

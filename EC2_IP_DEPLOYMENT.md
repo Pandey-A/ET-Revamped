@@ -72,11 +72,30 @@ ssh -i et_deployment_prod.pem ubuntu@13.200.189.83
 
 ---
 
-## Part C — Clone Chattiq repo first (required)
+## Part C — Remove old deployment (run from `~`, before clone)
 
-The deploy scripts live **inside** the repo. You must clone before running `remove-legacy-deployment.sh`.
+Do **not** run `deploy/scripts/...` from home — that path does not exist until you clone.
 
-Still on EC2 as `ubuntu`:
+**Option 1 — download script from GitHub (recommended):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Pandey-A/ET-Revamped/feature/chatops-deploy/deploy/scripts/remove-legacy-deployment.sh -o /tmp/remove-legacy-deployment.sh
+sudo bash /tmp/remove-legacy-deployment.sh
+```
+
+**Option 2 — after clone only** (full path):
+
+```bash
+sudo bash /opt/deepfake_et_frontend/deploy/scripts/remove-legacy-deployment.sh
+```
+
+Run Option 1 **before** `git clone` so a fresh clone is not moved to `.bak`.
+
+---
+
+## Part D — Clone repo
+
+No GitHub login needed — the repo is public.
 
 ```bash
 sudo mkdir -p /opt/deepfake_et_frontend
@@ -86,26 +105,6 @@ git clone -b feature/chatops-deploy https://github.com/Pandey-A/ET-Revamped.git 
 cd /opt/deepfake_et_frontend
 chmod +x deploy/scripts/*.sh
 ```
-
----
-
-## Part D — Remove old deployment (after clone)
-
-```bash
-sudo bash /opt/deepfake_et_frontend/deploy/scripts/remove-legacy-deployment.sh
-```
-
-**If that still says "No such file"**, run this manual cleanup instead:
-
-```bash
-sudo systemctl stop ai-agent-backend elevatetrust-backend next-frontend express-api 2>/dev/null || true
-sudo systemctl disable ai-agent-backend elevatetrust-backend next-frontend express-api 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/ai-agent-backend /etc/nginx/sites-enabled/elevatetrust /etc/nginx/sites-enabled/default
-sudo fuser -k 8000/tcp 8001/tcp 8002/tcp 8003/tcp 2>/dev/null || true
-sudo mv /opt/deepfake_et_frontend /opt/deepfake_et_frontend.bak 2>/dev/null || true
-```
-
-No GitHub username/password needed — the repo is public.
 
 ---
 
