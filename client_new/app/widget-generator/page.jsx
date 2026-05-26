@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { useAuth } from '@/context/AuthContext';
-import { fetchMyAgents } from '@/lib/api';
+import { fetchMyAgents, getApiBaseUrl } from '@/lib/api';
+import { getAuthHeaderObject } from '@/lib/authToken';
 import {
   generateChatWidgetCodeString,
   generateInstructions,
@@ -103,6 +104,20 @@ function SnippetCard({ label, code }) {
 /** Production origin used in generated code, embed tag, and env examples (override with NEXT_PUBLIC_APP_ORIGIN). */
 const WIDGET_LIVE_ORIGIN = 'https://elevatetrust.in';
 
+async function apiFetch(path, opts = {}) {
+  const url = `${getApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
+  const isJsonBody = typeof opts.body === 'string';
+  const baseHeaders = {
+    ...getAuthHeaderObject(),
+    ...(isJsonBody ? { 'Content-Type': 'application/json' } : {}),
+  };
+  return fetch(url, {
+    credentials: 'include',
+    ...opts,
+    headers: { ...baseHeaders, ...opts.headers },
+  });
+}
+
 export default function WidgetGeneratorPage() {
   const { isAuthenticated } = useAuth();
   const [agentList, setAgentList] = useState([]);
@@ -182,15 +197,31 @@ export default function WidgetGeneratorPage() {
     };
   }, [isAuthenticated]);
 
-  const onLogoFile = useCallback((e) => {
+  const onLogoFile = useCallback(async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setLogoUrl(reader.result);
-    };
-    reader.readAsDataURL(f);
-  }, []);
+    
+    const formData = new FormData();
+    formData.append('file', f);
+    
+    try {
+      const res = await apiFetch('/upload/logo', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || data.error || 'Upload failed');
+      
+      if (data.url) {
+        // Construct the absolute URL using the apiBaseUrl state so the generated widget gets a full link
+        const absoluteUrl = `${apiBaseUrl}${data.url}`;
+        setLogoUrl(absoluteUrl);
+      }
+    } catch (err) {
+      console.error('Could not upload logo:', err);
+    }
+  }, [apiBaseUrl]);
 
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true);

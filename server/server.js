@@ -1,5 +1,6 @@
 // server.js (or app.js)
 const express = require('express');
+const path = require('path');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -105,6 +106,7 @@ app.use('/api/auth', authLimiter, auth);
 app.use('/api/admin', adminRoute);
 app.use('/api', agentsRoute);
 app.use('/api', uploadRoute);
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // example protected admin route
 app.get('/api/admin/data', require('./middleware/auth').authMiddleware, require('./middleware/auth').adminOnly, (req, res) => {

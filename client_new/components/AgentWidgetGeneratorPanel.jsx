@@ -201,15 +201,31 @@ export default function AgentWidgetGeneratorPanel({ agent }) {
     };
   }, [agent?.id, agent?.name, agent?.greeting_message]);
 
-  const onLogoFile = useCallback((e) => {
+  const onLogoFile = useCallback(async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setLogoUrl(reader.result);
-    };
-    reader.readAsDataURL(f);
-  }, []);
+    
+    const formData = new FormData();
+    formData.append('file', f);
+    
+    try {
+      const res = await apiFetch('/upload/logo', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || data.error || 'Upload failed');
+      
+      if (data.url) {
+        // Construct the absolute URL using the apiBaseUrl state so the generated widget gets a full link
+        const absoluteUrl = `${apiBaseUrl}${data.url}`;
+        setLogoUrl(absoluteUrl);
+      }
+    } catch (err) {
+      toast.error(err.message || 'Could not upload logo');
+    }
+  }, [apiBaseUrl]);
 
   const handleGenerate = useCallback(async () => {
     if (!agentId) return;
