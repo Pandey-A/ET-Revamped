@@ -41,13 +41,6 @@ const authLimiter = createRateLimiter({
   message: 'Too many authentication attempts. Please try again later.',
 });
 
-const analysisApiLimiter = createRateLimiter({
-  windowMs: 60 * 1000,
-  max: 30,
-  prefix: 'analysis-api',
-  message: 'Too many analysis requests. Please wait and retry.',
-});
-
 // CORS: allowlisted env origins (production) + browser dev on localhost / 127.0.0.1 / ::1 (any port).
 // Optional: CORS_EXTRA_ORIGINS=comma list (e.g. http://192.168.1.5:3000 for LAN device testing).
 function parseOriginList(value) {
@@ -111,7 +104,7 @@ app.use('/api', globalLimiter);
 app.use('/api/auth', authLimiter, auth);
 app.use('/api/admin', adminRoute);
 app.use('/api', agentsRoute);
-app.use('/api', analysisApiLimiter, uploadRoute);
+app.use('/api', uploadRoute);
 
 // example protected admin route
 app.get('/api/admin/data', require('./middleware/auth').authMiddleware, require('./middleware/auth').adminOnly, (req, res) => {
