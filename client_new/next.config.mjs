@@ -19,6 +19,9 @@ const extraOrigins = (process.env.NEXT_ALLOWED_ORIGINS || '')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  turbopack: {
+    root: __dirname,
+  },
   output: 'standalone',
   trailingSlash: true,
   images: {
