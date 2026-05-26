@@ -36,7 +36,8 @@ embed_model = BedrockEmbedding(
 
 llm = Bedrock(
     model=bedrock_cfg.get("model_id", "gpt-oss-120b"),
-    region_name=bedrock_cfg.get("region", "ap-south-1")
+    region_name=bedrock_cfg.get("region", "ap-south-1"),
+    context_size=128000
 )
 
 # weaviate_client = weaviate.connect_to_weaviate_cloud(

@@ -24,6 +24,7 @@ class LLMHandler:
             model=model or _bedrock_cfg["model_id"],
             temperature=temperature or _bedrock_cfg.get("temperature", 0.7),
             region_name=_bedrock_cfg.get("region", "ap-south-1"),
+            context_size=128000
             # boto3 picks up IAM role creds automatically
         )
         return llm
