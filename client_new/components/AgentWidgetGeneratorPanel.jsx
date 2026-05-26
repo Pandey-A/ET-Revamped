@@ -337,7 +337,6 @@ export default function AgentWidgetGeneratorPanel({ agent }) {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Embed widget</p>
                 <h2 style={{ marginTop: 4, marginBottom: 0 }}>{agent.name || 'Agent'}</h2>
-                <p className="text-xs text-neutral-500 mt-1 font-mono">id: {agent.id}</p>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -393,14 +392,7 @@ export default function AgentWidgetGeneratorPanel({ agent }) {
                         onChange={onLogoFile}
                       />
                     </label>
-                    <label className="block font-medium text-neutral-700">
-                      API base URL (site origin, no trailing slash)
-                      <input
-                        className="mt-1 w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300 bg-white"
-                        value={apiBaseUrl}
-                        onChange={(e) => setApiBaseUrl(e.target.value)}
-                      />
-                    </label>
+
                     <label className="block font-medium text-neutral-700">
                       Starter questions (one per line)
                       <textarea
@@ -483,14 +475,7 @@ export default function AgentWidgetGeneratorPanel({ agent }) {
                         </label>
                       </div>
                     </fieldset>
-                    <label className="block font-medium text-neutral-700">
-                      Script / embed origin
-                      <input
-                        className="mt-1 w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300 bg-white"
-                        value={scriptOrigin}
-                        onChange={(e) => setScriptOrigin(e.target.value)}
-                      />
-                    </label>
+
                   </div>
 
                   <div className="mt-5 border-t border-neutral-200 pt-4">

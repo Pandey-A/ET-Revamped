@@ -230,29 +230,6 @@ function CreateAgentModal({ open, onClose, onCreate }) {
                   onChange={handleChange}
                 />
               </div>
-              <div className="aia-form-row">
-                <div className="aia-form-group">
-                  <label>LLM Model</label>
-                  <select name="model" value={form.model} onChange={handleChange}>
-                    <option value="gpt-4o-mini">GPT-4o Mini</option>
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                  </select>
-                </div>
-                <div className="aia-form-group">
-                  <label>Temperature</label>
-                  <input
-                    name="temperature"
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    max="1"
-                    value={form.temperature}
-                    onChange={handleChange}
-                  />
-                </div>
-              </div>
               <div className="aia-form-group">
                 <label>Escalation Channel</label>
                 <select name="escalation_channel" value={form.escalation_channel} onChange={handleChange}>

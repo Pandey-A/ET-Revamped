@@ -345,15 +345,7 @@ export default function WidgetGeneratorPage() {
                   </label>
                 )}
 
-                <label className="block text-sm font-medium text-neutral-700">
-                  API base URL (origin, no trailing slash)
-                  <input
-                    className="mt-1.5 w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
-                    value={apiBaseUrl}
-                    onChange={(e) => setApiBaseUrl(e.target.value)}
-                    placeholder="https://api.example.com"
-                  />
-                </label>
+
 
                 <label className="block text-sm font-medium text-neutral-700">
                   Starter questions (one per line)
@@ -443,14 +435,7 @@ export default function WidgetGeneratorPage() {
                   </div>
                 </fieldset>
 
-                <label className="block text-sm font-medium text-neutral-700">
-                  Script CDN / site origin (for embed tag)
-                  <input
-                    className="mt-1.5 w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
-                    value={scriptOrigin}
-                    onChange={(e) => setScriptOrigin(e.target.value)}
-                  />
-                </label>
+
               </div>
 
               <div className="mt-8 border-t border-neutral-100 pt-6">
