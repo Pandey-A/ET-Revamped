@@ -46,8 +46,12 @@ livekit-api
 filelock
 pypdf
 
+# Chat history + WhatsApp leads
+llama-index-storage-chat-store-redis
+redis
+motor
+openpyxl
+
 # Utilities
 pyyaml
 jinja2
-pandas
-openpyxl

@@ -123,7 +123,15 @@ echo "==> Python virtualenv + dependencies"
 cd "${APP_DIR}/HR-Reachout-Agent-main"
 sudo -u ubuntu python3 -m venv .venv
 sudo -u ubuntu .venv/bin/pip install -q --upgrade pip
-sudo -u ubuntu .venv/bin/pip install -q -r requirements.txt
+# Linux EC2: use lean server requirements (full requirements.txt includes Windows-only pywin32)
+REQ_FILE="requirements_server.txt"
+if [[ ! -f "${REQ_FILE}" ]]; then
+  REQ_FILE="requirements.txt"
+fi
+LINUX_REQ="$(mktemp)"
+grep -vE '^(pywin32|pyreadline3)==' "${REQ_FILE}" > "${LINUX_REQ}"
+sudo -u ubuntu .venv/bin/pip install -q -r "${LINUX_REQ}"
+rm -f "${LINUX_REQ}"
 sudo -u ubuntu .venv/bin/pip install -q gunicorn 'uvicorn[standard]'
 
 if [[ ! -f "${APP_DIR}/HR-Reachout-Agent-main/AgentManager/config.json" ]]; then

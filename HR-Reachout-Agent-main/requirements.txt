@@ -149,13 +149,11 @@ pyee==13.0.0
 pygments==2.19.2
 pyjwt==2.10.1
 pypdf==5.9.0
-pyreadline3==3.5.4
 pysocks==1.7.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 python-multipart==0.0.21
 pytz==2025.2
-pywin32==311
 pyyaml==6.0.3
 qdrant-client==1.16.2
 referencing==0.37.0
