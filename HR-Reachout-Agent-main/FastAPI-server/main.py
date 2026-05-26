@@ -1355,8 +1355,12 @@ async def setup_webhooks():
     # Sometimes, Telegram webhooks fail during FastAPI cold startup if the public domain isn’t reachable yet (e.g., in ngrok, Docker, Cloud Run).
     await asyncio.sleep(2)  # Give services a bit of time to settle
     try:
-        # Replace with your actual public URL or tunnel URL (e.g. ngrok)
-        BASE_WEBHOOK_URL = "https://b65c-2405-201-101b-482a-151e-6624-2510-d0fd.ngrok-free.app"  # Change this
+        BASE_WEBHOOK_URL = (os.getenv("TELEGRAM_WEBHOOK_BASE_URL") or "").strip().rstrip("/")
+        if not BASE_WEBHOOK_URL:
+            logging.warning(
+                "[Webhook Setup] TELEGRAM_WEBHOOK_BASE_URL not set; skipping Telegram webhook registration."
+            )
+            return
 
         for bot in config["Telegram"]["bots"]:
             bot_token = bot["bot_token"]

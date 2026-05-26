@@ -1,0 +1,17 @@
+[Unit]
+Description=Chattiq Express API (auth, agents, Postgres)
+After=network.target docker.service chattiq-fastapi.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/deepfake_et_frontend/server
+EnvironmentFile=/opt/deepfake_et_frontend/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

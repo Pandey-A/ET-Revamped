@@ -1,0 +1,23 @@
+[Unit]
+Description=Chattiq FastAPI (AI agent, widget chat, WhatsApp)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/deepfake_et_frontend/HR-Reachout-Agent-main
+EnvironmentFile=/opt/deepfake_et_frontend/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/deepfake_et_frontend/HR-Reachout-Agent-main/.venv/bin/gunicorn \
+  -k uvicorn.workers.UvicornWorker \
+  -w 2 \
+  -b 127.0.0.1:8000 \
+  --timeout 120 \
+  FastAPI-server.main:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+# Infrastructure only: PostgreSQL + Redis on EC2.
+# App services run via systemd (see deploy/systemd/).
+#
+# Usage (from repo root on server):
+#   export $(grep -v '^#' /opt/deepfake_et_frontend/.env | xargs)
+#   docker compose -f deploy/docker-compose.infra.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chattiq_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chattiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-chattiq}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - chattiq_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chattiq} -d ${POSTGRES_DB:-chattiq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: chattiq_redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - chattiq_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  chattiq_pg_data:
+  chattiq_redis_data:
