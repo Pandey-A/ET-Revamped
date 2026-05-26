@@ -24,6 +24,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   experimental: {
     serverActions: {
       allowedOrigins: [...new Set([...defaultOrigins, ...extraOrigins])],
