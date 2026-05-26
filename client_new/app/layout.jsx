@@ -1,9 +1,5 @@
 import "./globals.css";
-import dynamic from "next/dynamic";
-
-const ClientProviders = dynamic(() => import("@/components/ClientProviders"), {
-  ssr: false,
-});
+import ClientProviders from "@/components/ClientProviders";
 
 export const metadata = {
   title: "Elevate Trust.in",
