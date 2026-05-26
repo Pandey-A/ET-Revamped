@@ -64,6 +64,27 @@ fi
 APP_PUBLIC_URL="${APP_PUBLIC_URL%/}"
 export APP_DOMAIN="${DOMAIN}" APP_PUBLIC_URL DEPLOY_TARGET COOKIE_SECURE
 
+# Ubuntu docker.io often lacks "docker compose" v2; support plugin or docker-compose v1.
+docker_compose() {
+  if docker compose version &>/dev/null 2>&1; then
+    docker compose "$@"
+  elif command -v docker-compose &>/dev/null; then
+    docker-compose "$@"
+  else
+    echo "Installing Docker Compose..."
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin docker-compose
+    if docker compose version &>/dev/null 2>&1; then
+      docker compose "$@"
+    elif command -v docker-compose &>/dev/null; then
+      docker-compose "$@"
+    else
+      echo "ERROR: Docker Compose not available. Run: apt-get install -y docker-compose-plugin"
+      exit 1
+    fi
+  fi
+}
+
 if [[ ! -d "${APP_DIR}/.git" ]]; then
   echo "ERROR: ${APP_DIR} is not a git clone. Clone first:"
   echo "  git clone -b ${BRANCH} ${GIT_REPO:-https://github.com/Pandey-A/ET-Revamped.git} ${APP_DIR}"
@@ -76,9 +97,12 @@ bash "${APP_DIR}/deploy/scripts/stop-legacy-services.sh" || true
 echo "==> Installing system packages (if needed)"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  git curl nginx docker.io docker-compose-plugin \
+  git curl nginx docker.io docker-compose-plugin docker-compose \
   build-essential python3 python3-venv python3-pip \
   >/dev/null 2>&1 || true
+if ! docker compose version &>/dev/null 2>&1 && ! command -v docker-compose &>/dev/null; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin docker-compose
+fi
 
 if ! command -v node &>/dev/null || [[ "$(node -v 2>/dev/null || echo v0)" < "v18" ]]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -92,7 +116,7 @@ sudo -u ubuntu git checkout "${BRANCH}"
 sudo -u ubuntu git pull origin "${BRANCH}" || true
 
 echo "==> Starting PostgreSQL + Redis"
-docker compose -f "${APP_DIR}/deploy/docker-compose.infra.yml" --env-file "${ENV_FILE}" up -d
+docker_compose -f "${APP_DIR}/deploy/docker-compose.infra.yml" up -d
 sleep 5
 
 echo "==> Python virtualenv + dependencies"
