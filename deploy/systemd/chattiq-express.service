@@ -9,7 +9,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/deepfake_et_frontend/server
 EnvironmentFile=/opt/deepfake_et_frontend/.env
-ExecStart=/usr/bin/node server.js
+ExecStart=/usr/bin/env PORT=8002 node server.js
 Restart=always
 RestartSec=5
 

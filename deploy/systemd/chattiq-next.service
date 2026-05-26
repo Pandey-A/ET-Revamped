@@ -10,7 +10,7 @@ WorkingDirectory=/opt/deepfake_et_frontend/client_new
 EnvironmentFile=/opt/deepfake_et_frontend/.env
 Environment=PORT=8001
 Environment=HOSTNAME=127.0.0.1
-ExecStart=/usr/bin/node .next/standalone/server.js
+ExecStart=/usr/bin/env PORT=8001 node .next/standalone/server.js
 Restart=always
 RestartSec=5
 
