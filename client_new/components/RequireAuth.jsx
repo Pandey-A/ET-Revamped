@@ -23,19 +23,13 @@ export default function RequireAuth({ children, allowedRoles = ['user', 'admin']
       return;
     }
 
-    if (!allowedRoles.includes(user?.role)) {
-      if (user?.role === 'admin') {
-        window.location.href = '/admin/';
-      } else {
-        window.location.href = '/upload/';
-      }
-    }
+
   }, [isLoading, isAuthenticated, user, allowedRoles, pathname]);
 
   if (isLoading) return null;
   if (!isAuthenticated) return null;
   if (user?.isBlocked) return null;
-  if (!allowedRoles.includes(user?.role)) return null;
+
 
   return <>{children}</>;
 }

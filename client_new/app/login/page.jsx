@@ -14,7 +14,7 @@ function LoginContent() {
   const { login } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get("from") || "/upload";
+  const from = searchParams.get("from") || "/";
   const [formData, setFormData] = useState({ email: "", password: "" });
 
   const handleSubmit = async (e) => {

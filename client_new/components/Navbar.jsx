@@ -97,21 +97,10 @@ const Navbar = () => {
           <div className="hidden items-center gap-8 md:flex">
             <a href="/" className="text-sm font-light text-black transition-colors hover:opacity-70">Home</a>
             <a href="/documentation/" className="text-sm font-light text-black transition-colors hover:opacity-70">Features</a>
-            {user?.role === "user" && (
-              <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
-            )}
-            {(user?.role === "user" || user?.role === "admin") && (
-              <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
-            )}
-            {user?.role === "admin" && (
-              <>
-                <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
-                <a href="/admin/whatsapp-channels/" className="text-sm font-light text-black transition-colors hover:opacity-70">WhatsApp</a>
-              </>
-            )}
-            {!user?.role && (
-              <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
-            )}
+            <a href="/upload/" className="text-sm font-light text-black transition-colors hover:opacity-70">Functionality</a>
+            <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
+            <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
+            <a href="/admin/whatsapp-channels/" className="text-sm font-light text-black transition-colors hover:opacity-70">WhatsApp</a>
           </div>
         )}
 
@@ -141,21 +130,10 @@ const Navbar = () => {
         >
           <a href="/" onClick={closeMobile} className="text-base font-medium text-black">Home</a>
           <a href="/documentation/" onClick={closeMobile} className="text-base font-medium text-black">Features</a>
-          {user?.role === "user" && (
-            <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
-          )}
-          {(user?.role === "user" || user?.role === "admin") && (
-            <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
-          )}
-          {user?.role === "admin" && (
-            <>
-              <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
-              <a href="/admin/whatsapp-channels/" onClick={closeMobile} className="text-base font-medium text-black">WhatsApp</a>
-            </>
-          )}
-          {!user?.role && (
-            <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
-          )}
+          <a href="/upload/" onClick={closeMobile} className="text-base font-medium text-black">Functionality</a>
+          <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
+          <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
+          <a href="/admin/whatsapp-channels/" onClick={closeMobile} className="text-base font-medium text-black">WhatsApp</a>
           <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col gap-3">
             {authRight(true)}
           </div>
