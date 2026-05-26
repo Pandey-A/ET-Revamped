@@ -4,5 +4,6 @@ build/
 .next/
 out/
 .env*
+*.pem
 .DS_Store
 *.log

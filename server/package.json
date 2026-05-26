@@ -11,7 +11,8 @@
     "dev": "nodemon server.js",
     "mail:check": "node scripts/check-mail.js",
     "db:migrate": "node db/migrate.js",
-    "db:migrate-from-mongo": "node scripts/migrate-mongo-to-postgres.js"
+    "db:migrate-from-mongo": "node scripts/migrate-mongo-to-postgres.js",
+    "agents:sync-fastapi": "node scripts/sync-agents-to-fastapi.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

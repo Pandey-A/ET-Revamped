@@ -3,6 +3,20 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const defaultOrigins = [
+  'elevatetrust.in',
+  'www.elevatetrust.in',
+  'localhost:3000',
+  'localhost:3001',
+  '127.0.0.1:3000',
+  '127.0.0.1:3001',
+  'localhost:8001',
+];
+const extraOrigins = (process.env.NEXT_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
@@ -12,15 +26,7 @@ const nextConfig = {
   },
   experimental: {
     serverActions: {
-      allowedOrigins: [
-        'elevatetrust.in',
-        'www.elevatetrust.in',
-        'localhost:3000',
-        'localhost:3001',
-        '127.0.0.1:3000',
-        '127.0.0.1:3001',
-        'localhost:8001',
-      ],
+      allowedOrigins: [...new Set([...defaultOrigins, ...extraOrigins])],
     },
   },
   turbopack: {

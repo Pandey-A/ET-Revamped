@@ -20,6 +20,20 @@ const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || SMTP_PORT === 465;
 const EMAIL_FROM = process.env.EMAIL_FROM || '';
 
+/** false on http://EC2-IP deploys; true when FRONTEND_URL is https or COOKIE_SECURE=true */
+function authCookieSecure() {
+  if (process.env.COOKIE_SECURE === 'true') return true;
+  if (process.env.COOKIE_SECURE === 'false') return false;
+  return (
+    process.env.NODE_ENV === 'production' &&
+    String(process.env.FRONTEND_URL || '').startsWith('https://')
+  );
+}
+
+function authCookieSameSite() {
+  return authCookieSecure() ? 'strict' : 'lax';
+}
+
 let cachedTransporter = null;
 
 function buildUsagePayload(user) {
@@ -251,8 +265,8 @@ async function loginUser(req, res) {
 
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      secure: authCookieSecure(),
+      sameSite: authCookieSameSite(),
       path: '/',
       maxAge: 2 * 60 * 60 * 1000,
     });

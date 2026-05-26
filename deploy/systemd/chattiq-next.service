@@ -1,0 +1,18 @@
+[Unit]
+Description=Chattiq Next.js frontend (standalone)
+After=network.target chattiq-express.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/deepfake_et_frontend/client_new
+EnvironmentFile=/opt/deepfake_et_frontend/.env
+Environment=PORT=8001
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/usr/bin/node .next/standalone/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

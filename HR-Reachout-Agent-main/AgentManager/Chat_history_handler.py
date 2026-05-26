@@ -2,204 +2,80 @@ import json
 import os
 import logging
 from datetime import datetime
-from llama_index.core.storage.chat_store.simple_chat_store import SimpleChatStore
+from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.core.llms import ChatMessage
-from typing import List, Set
-from filelock import FileLock
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _load_redis_config() -> dict:
+    """Load Redis configuration from config.json or environment variables."""
+    redis_url = os.environ.get("REDIS_URL")
+    ttl = None
+
+    if not redis_url:
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "config.json")
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            redis_cfg = config.get("Redis", {})
+            redis_url = redis_cfg.get("url", "redis://localhost:6379")
+            ttl = redis_cfg.get("ttl")  # None means persist forever
+        except Exception as e:
+            logger.warning(f"Could not load Redis config from file, using defaults: {e}")
+            redis_url = "redis://localhost:6379"
+
+    return {"url": redis_url, "ttl": ttl}
+
+
 class ChatHistoryHandler:
-    def __init__(self,
-                whatsapp_persist_path: str = os.path.join("AgentManager", "whatsapp", "whatsapp_history_handler.json"),
-                chatbot_persist_path: str = os.path.join("AgentManager", "chatbot", "chatbot_history_handler.json")):
+    """
+    Manages chat history for both chatbot and WhatsApp sessions using Redis.
+
+    Uses two separate RedisChatStore instances with distinct key prefixes
+    so chatbot and WhatsApp histories are cleanly separated within the
+    same Redis instance.
+    """
+
+    # Key prefixes used inside Redis to separate the two stores
+    CHATBOT_PREFIX = "chatbot"
+    WHATSAPP_PREFIX = "whatsapp_history"
+
+    def __init__(self, redis_url: str = None, ttl: Optional[int] = None):
         logger.info(f"Creating ChatHistoryHandler instance: {id(self)}")
-        self._whatsapp_persist_path = whatsapp_persist_path
-        self._chatbot_persist_path = chatbot_persist_path
 
-        self._chatbot_store = SimpleChatStore() 
-        self._whatsapp_store = SimpleChatStore() 
+        cfg = _load_redis_config()
+        url = redis_url or cfg["url"]
+        session_ttl = ttl if ttl is not None else cfg.get("ttl")
 
-        self._whatsapp_session_ids: Set[str] = set()
-        self._chatbot_session_ids: Set[str] = set()
+        logger.info(f"Connecting to Redis at {url} (ttl={session_ttl})")
 
-        os.makedirs(os.path.dirname(self._whatsapp_persist_path), exist_ok=True)
-        os.makedirs(os.path.dirname(self._chatbot_persist_path), exist_ok=True)
+        # Build kwargs — only pass ttl if it's set (not None)
+        chatbot_kwargs = {"redis_url": url}
+        whatsapp_kwargs = {"redis_url": url}
+        if session_ttl is not None:
+            chatbot_kwargs["ttl"] = session_ttl
+            whatsapp_kwargs["ttl"] = session_ttl
 
-        self._load_whatsapp_from_file()
-        self._load_chatbot_from_file()  # NEW
+        self._chatbot_store = RedisChatStore(**chatbot_kwargs)
+        self._whatsapp_store = RedisChatStore(**whatsapp_kwargs)
 
-    def _load_whatsapp_from_file(self):
-        """Load WhatsApp history from JSON file, falling back to .tmp if needed, or create new file if none exists."""
-        temp_path = self._whatsapp_persist_path + '.tmp'
-        for path in [self._whatsapp_persist_path, temp_path]:
-            if os.path.exists(path):
-                try:
-                    with FileLock(path + ".lock", timeout=10):  # Added timeout
-                        with open(path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                    for session_id, messages in data.items():
-                        chat_messages = [
-                            ChatMessage(role=msg['role'], content=msg['content'])
-                            for msg in messages
-                        ]
-                        self._whatsapp_store.set_messages(session_id, chat_messages)
-                        self._whatsapp_session_ids.add(session_id)
-                    logger.info(f"Loaded WhatsApp history for {len(data)} sessions from {path}")
-                    return
-                except json.JSONDecodeError as e:
-                    logger.error(f"Error decoding {path}: {e}")
-                except PermissionError as e:
-                    logger.error(f"Permission error accessing {path}: {e}")
-                except Exception as e:
-                    logger.error(f"Error loading {path}: {e}")
-        
-        # Create new empty JSON file if none exists
-        try:
-            with FileLock(self._whatsapp_persist_path + ".lock", timeout=10):  # Added timeout
-                with open(self._whatsapp_persist_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f, indent=2, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-            logger.info(f"Created new empty WhatsApp history file at {self._whatsapp_persist_path}")
-        except PermissionError as e:
-            logger.error(f"Permission error creating WhatsApp history file at {self._whatsapp_persist_path}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error creating new WhatsApp history file at {self._whatsapp_persist_path}: {e}")
-            raise
+        logger.info("ChatHistoryHandler initialized with Redis backend")
 
-    def reload_whatsapp_history(self):
-        """Reload WhatsApp history from JSON file without resetting store."""
-        self._load_whatsapp_from_file()
-        # Safely handle empty session IDs
-        session_id = next(iter(self._whatsapp_session_ids), "")  # Use next with default
-        messages = self._whatsapp_store.get_messages(session_id) if session_id else []
-        if messages:
-            logger.info(f"Reload successful: {len(messages)} messages for session {session_id}")
-        else:
-            logger.info(f"Reload found no messages for session {session_id}")
-
-    def _save_whatsapp_to_file(self):
-        """Save WhatsApp history to JSON file atomically."""
-        data = {}
-        temp_path = self._whatsapp_persist_path + '.tmp'
-        try:
-            with FileLock(self._whatsapp_persist_path + ".lock", timeout=10):  # Added timeout
-                for session_id in self._whatsapp_session_ids:
-                    messages = self._whatsapp_store.get_messages(session_id)
-                    if messages:
-                        data[session_id] = [
-                            {'role': msg.role, 'content': msg.content}
-                            for msg in messages
-                        ]
-                with open(temp_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-                logger.info(f"Renaming {temp_path} to {self._whatsapp_persist_path}")
-                os.replace(temp_path, self._whatsapp_persist_path)
-                logger.info(f"Saved WhatsApp history to {self._whatsapp_persist_path}")
-        except PermissionError as e:
-            logger.error(f"Permission error saving or renaming {temp_path} to {self._whatsapp_persist_path}: {e}")
-            if os.path.exists(temp_path):
-                logger.warning(f"Temporary file {temp_path} remains due to permission error")
-            raise
-        except Exception as e:
-            logger.error(f"Error saving WhatsApp history to {temp_path} or renaming to {self._whatsapp_persist_path}: {e}")
-            if os.path.exists(temp_path):
-                logger.warning(f"Temporary file {temp_path} remains due to error")
-            raise
-
-    def add_whatsapp_message(self, session_id: str, role: str, content: str) -> bool:
-        """Add a new WhatsApp message to the history and persist to file."""
-        try:
-            if not isinstance(session_id, str) or not session_id.strip():
-                logger.error(f"Invalid session_id for adding WhatsApp message: {session_id}")
-                return False
-            logger.info(f"Attempting to add WhatsApp message for session {session_id}: {role}: {content}")
-            # Reload history to ensure latest state
-            self._load_whatsapp_from_file()
-            messages = self._whatsapp_store.get_messages(session_id)
-            new_msg = ChatMessage(role=role, content=content)
-            messages.append(new_msg)
-            self._whatsapp_store.set_messages(session_id, messages)
-            self._whatsapp_session_ids.add(session_id)
-            self._save_whatsapp_to_file()
-            logger.info(f"Added WhatsApp message for session {session_id}: {role}: {content}")
-            return True
-        except Exception as e:
-            logger.error(f"Error adding WhatsApp message for session {session_id}: {e}")
-            return False
-        
-    def _load_chatbot_from_file(self):
-        """Load chatbot history from JSON file, falling back to .tmp if needed."""
-        temp_path = self._chatbot_persist_path + '.tmp'
-        for path in [self._chatbot_persist_path, temp_path]:
-            if os.path.exists(path):
-                try:
-                    with FileLock(path + ".lock", timeout=10):
-                        with open(path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                    for session_id, messages in data.items():
-                        chat_messages = [
-                            ChatMessage(role=msg['role'], content=msg['content'] , additional_kwargs={"timestamp": msg.get('timestamp', '')} )
-                            for msg in messages
-                        ]
-                        self._chatbot_store.set_messages(session_id, chat_messages)
-                        self._chatbot_session_ids.add(session_id)
-                    logger.info(f"Loaded chatbot history for {len(data)} sessions from {path}")
-                    return
-                except json.JSONDecodeError as e:
-                    logger.error(f"Error decoding {path}: {e}")
-                except Exception as e:
-                    logger.error(f"Error loading chatbot history from {path}: {e}")
-        
-        # Create new file if none exist
-        try:
-            with FileLock(self._chatbot_persist_path + ".lock", timeout=10):
-                with open(self._chatbot_persist_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f, indent=2, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-            logger.info(f"Created new empty chatbot history file at {self._chatbot_persist_path}")
-        except Exception as e:
-            logger.error(f"Error creating chatbot history file: {e}")
-    
-
-    def _save_chatbot_to_file(self):
-        """Save chatbot history to JSON file atomically."""
-        data = {}
-        temp_path = self._chatbot_persist_path + '.tmp'
-        try:
-            with FileLock(self._chatbot_persist_path + ".lock", timeout=10):
-                for session_id in self._chatbot_session_ids:
-                    messages = self._chatbot_store.get_messages(session_id)
-                    if messages:
-                        data[session_id] = [
-                            {'role': msg.role, 'content': msg.content , 'timestamp': msg.additional_kwargs.get("timestamp", "")}
-                            for msg in messages
-                        ]
-                with open(temp_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(temp_path, self._chatbot_persist_path)
-                logger.info(f"Saved chatbot history to {self._chatbot_persist_path}")
-        except Exception as e:
-            logger.error(f"Error saving chatbot history: {e}")
-            if os.path.exists(temp_path):
-                logger.warning(f"Temporary file {temp_path} remains due to error")
-
+    # ──────────────────────────────────────────────────────────────────────
+    #  Chatbot Methods
+    # ──────────────────────────────────────────────────────────────────────
 
     def add_message(self, session_id: str, role: str, content: str) -> bool:
-        """Add a new chatbot message and persist to file."""
+        """Add a new chatbot message and persist to Redis."""
         try:
             if not isinstance(session_id, str) or not session_id.strip():
                 logger.error(f"Invalid session_id for adding chatbot message: {session_id}")
                 return False
-            self._load_chatbot_from_file()  # Ensure latest state
-            messages = self._chatbot_store.get_messages(session_id)
+
+            key = f"{self.CHATBOT_PREFIX}:{session_id}"
+            messages = self._chatbot_store.get_messages(key)
 
             timestamp = datetime.now().isoformat()
 
@@ -208,11 +84,13 @@ class ChatHistoryHandler:
             else:
                 content = str(content)
 
-            new_msg = ChatMessage(role=role, content=content , additional_kwargs={"timestamp": timestamp} )
+            new_msg = ChatMessage(
+                role=role,
+                content=content,
+                additional_kwargs={"timestamp": timestamp},
+            )
             messages.append(new_msg)
-            self._chatbot_store.set_messages(session_id, messages)
-            self._chatbot_session_ids.add(session_id)
-            self._save_chatbot_to_file()  # Save to disk
+            self._chatbot_store.set_messages(key, messages)
             logger.info(f"Added chatbot message for session {session_id}: {role}: {content}")
             return True
         except Exception as e:
@@ -225,42 +103,13 @@ class ChatHistoryHandler:
             if not isinstance(session_id, str) or not session_id.strip():
                 logger.error(f"Invalid session_id for retrieving chatbot history: {session_id}")
                 return []
-            messages = self._chatbot_store.get_messages(session_id)
+            key = f"{self.CHATBOT_PREFIX}:{session_id}"
+            messages = self._chatbot_store.get_messages(key)
             logger.info(f"Retrieved chatbot history for session {session_id}: {len(messages)} messages")
             return messages
         except Exception as e:
             logger.error(f"Error retrieving chatbot history for session {session_id}: {e}")
             return []
-
-    def get_whatsapp_history(self, session_id: str) -> List[ChatMessage]:
-        """Retrieve WhatsApp history for a session."""
-        try:
-            if not isinstance(session_id, str) or not session_id.strip():
-                logger.error(f"Invalid session_id for retrieving WhatsApp history: {session_id}")
-                return []
-            messages = self._whatsapp_store.get_messages(session_id)
-            logger.info(f"Retrieved WhatsApp history for session {session_id}: {len(messages)} messages")
-            return messages
-        except Exception as e:
-            logger.error(f"Error retrieving WhatsApp history for session {session_id}: {e}")
-            return []
-
-    def get_formatted_whatsapp_history(self, session_id: str) -> str:
-        """Return formatted WhatsApp history as a string."""
-        try:
-            if not isinstance(session_id, str) or not session_id.strip():
-                logger.error(f"Invalid session_id for formatting WhatsApp history: {session_id}")
-                return "Invalid session ID."
-            messages = self._whatsapp_store.get_messages(session_id)
-            if not messages:
-                logger.info(f"No WhatsApp history available for session {session_id}")
-                return "No WhatsApp history available."
-            formatted_messages = [f"{msg.role}: {msg.content}" for msg in messages]
-            logger.info(f"Formatted WhatsApp history for session {session_id}: {len(formatted_messages)} messages")
-            return "\n".join(formatted_messages)
-        except Exception as e:
-            logger.error(f"Error formatting WhatsApp history for session {session_id}: {e}")
-            return "Error retrieving WhatsApp history."
 
     def get_formatted_history(self, session_id: str) -> str:
         """Return formatted chatbot history as a string."""
@@ -268,7 +117,8 @@ class ChatHistoryHandler:
             if not isinstance(session_id, str) or not session_id.strip():
                 logger.error(f"Invalid session_id for formatting chatbot history: {session_id}")
                 return "Invalid session ID."
-            messages = self._chatbot_store.get_messages(session_id)
+            key = f"{self.CHATBOT_PREFIX}:{session_id}"
+            messages = self._chatbot_store.get_messages(key)
             if not messages:
                 logger.info(f"No chatbot history available for session {session_id}")
                 return "No chatbot history available."
@@ -286,4 +136,85 @@ class ChatHistoryHandler:
         except Exception as e:
             logger.error(f"Error formatting chatbot history for session {session_id}: {e}")
             return "Error retrieving chatbot history."
-        
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  WhatsApp Methods
+    # ──────────────────────────────────────────────────────────────────────
+
+    def add_whatsapp_message(self, session_id: str, role: str, content: str) -> bool:
+        """Add a new WhatsApp message to the history and persist to Redis."""
+        try:
+            if not isinstance(session_id, str) or not session_id.strip():
+                logger.error(f"Invalid session_id for adding WhatsApp message: {session_id}")
+                return False
+            logger.info(f"Attempting to add WhatsApp message for session {session_id}: {role}: {content}")
+            key = f"{self.WHATSAPP_PREFIX}:{session_id}"
+            messages = self._whatsapp_store.get_messages(key)
+            new_msg = ChatMessage(role=role, content=content)
+            messages.append(new_msg)
+            self._whatsapp_store.set_messages(key, messages)
+            logger.info(f"Added WhatsApp message for session {session_id}: {role}: {content}")
+            return True
+        except Exception as e:
+            logger.error(f"Error adding WhatsApp message for session {session_id}: {e}")
+            return False
+
+    def get_whatsapp_history(self, session_id: str) -> List[ChatMessage]:
+        """Retrieve WhatsApp history for a session."""
+        try:
+            if not isinstance(session_id, str) or not session_id.strip():
+                logger.error(f"Invalid session_id for retrieving WhatsApp history: {session_id}")
+                return []
+            key = f"{self.WHATSAPP_PREFIX}:{session_id}"
+            messages = self._whatsapp_store.get_messages(key)
+            logger.info(f"Retrieved WhatsApp history for session {session_id}: {len(messages)} messages")
+            return messages
+        except Exception as e:
+            logger.error(f"Error retrieving WhatsApp history for session {session_id}: {e}")
+            return []
+
+    def get_formatted_whatsapp_history(self, session_id: str) -> str:
+        """Return formatted WhatsApp history as a string."""
+        try:
+            if not isinstance(session_id, str) or not session_id.strip():
+                logger.error(f"Invalid session_id for formatting WhatsApp history: {session_id}")
+                return "Invalid session ID."
+            key = f"{self.WHATSAPP_PREFIX}:{session_id}"
+            messages = self._whatsapp_store.get_messages(key)
+            if not messages:
+                logger.info(f"No WhatsApp history available for session {session_id}")
+                return "No WhatsApp history available."
+            formatted_messages = [f"{msg.role}: {msg.content}" for msg in messages]
+            logger.info(f"Formatted WhatsApp history for session {session_id}: {len(formatted_messages)} messages")
+            return "\n".join(formatted_messages)
+        except Exception as e:
+            logger.error(f"Error formatting WhatsApp history for session {session_id}: {e}")
+            return "Error retrieving WhatsApp history."
+
+    def reload_whatsapp_history(self):
+        """No-op: Redis is always live, no reload needed."""
+        logger.info("reload_whatsapp_history called — no-op with Redis backend")
+
+    def list_chatbot_session_ids(self) -> List[str]:
+        """Scan Redis for all chatbot session keys."""
+        try:
+            import redis as redis_lib
+
+            cfg = _load_redis_config()
+            client = redis_lib.from_url(cfg["url"], decode_responses=True)
+            session_ids = set()
+
+            for pattern in ("chatbot:*", "*:chatbot:*"):
+                for key in client.scan_iter(match=pattern, count=200):
+                    if not key:
+                        continue
+                    if key.startswith("chatbot:"):
+                        session_ids.add(key[len("chatbot:"):])
+                    elif ":chatbot:" in key:
+                        session_ids.add(key.split(":chatbot:", 1)[1])
+
+            logger.info(f"Found {len(session_ids)} chatbot sessions in Redis")
+            return sorted(session_ids)
+        except Exception as e:
+            logger.error(f"Error listing Redis chatbot sessions: {e}")
+            return []

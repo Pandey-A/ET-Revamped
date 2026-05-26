@@ -10,6 +10,8 @@ llama-index-readers-file
 llama-index-readers-web
 llama-index-vector-stores-pinecone
 llama-index-vector-stores-weaviate
+llama-index-storage-chat-store-redis
+redis
 pandas<2.3.0
 python-dotenv
 httpx

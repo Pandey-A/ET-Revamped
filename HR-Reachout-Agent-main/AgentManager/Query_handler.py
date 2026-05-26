@@ -138,8 +138,13 @@ class QueryHandler:
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             
-            # For anonymous/public chat sessions, inject lead-gen behavior
-            if session_id.startswith("anon_") or session_id.startswith("whatsapp_"):
+            # For website widget / anonymous sessions, inject lead-gen behavior
+            if (
+                session_id.startswith("anon_")
+                or session_id.startswith("whatsapp_")
+                or session_id.startswith("widget_")
+                or session_id.startswith("w_")
+            ):
                 is_start = len(chat_history) <= 2
                 is_whatsapp = session_id.startswith("whatsapp_")
                 
@@ -158,12 +163,14 @@ class QueryHandler:
                     )
                 else:
                     lead_gen_instruction += (
-                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name, email, and phone number?'"
+                        "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
+                        "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
+                        "\n7. If they say no more questions, thank them warmly and confirm the chat is complete."
                     )
                 lead_gen_instruction += (
-                    "\n6. NEVER ask for their contact details at the very beginning of the chat or if they are still asking questions."
-                    "\n7. NEVER repeat a question you have already asked."
-                    "\n8. Keep your responses concise and conversational."
+                    "\n8. NEVER ask for contact details at the very beginning or while they still have product questions."
+                    "\n9. NEVER repeat a question you have already asked."
+                    "\n10. Keep responses concise (under 60 words) and conversational."
                 )
                 
                 content += lead_gen_instruction
@@ -216,8 +223,13 @@ class QueryHandler:
             content = self._get_description_from_store(agent_id)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
-            # For anonymous/public chat sessions, inject lead-gen behavior
-            if session_id.startswith("anon_") or session_id.startswith("whatsapp_"):
+            # For website widget / anonymous sessions, inject lead-gen behavior
+            if (
+                session_id.startswith("anon_")
+                or session_id.startswith("whatsapp_")
+                or session_id.startswith("widget_")
+                or session_id.startswith("w_")
+            ):
                 is_start = len(chat_history) <= 2
                 is_whatsapp = session_id.startswith("whatsapp_")
                 
@@ -236,12 +248,14 @@ class QueryHandler:
                     )
                 else:
                     lead_gen_instruction += (
-                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name, email, and phone number?'"
+                        "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
+                        "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
+                        "\n7. If they say no more questions, thank them warmly and confirm the chat is complete."
                     )
                 lead_gen_instruction += (
-                    "\n6. NEVER ask for their contact details at the very beginning of the chat or if they are still asking questions."
-                    "\n7. NEVER repeat a question you have already asked."
-                    "\n8. Keep your responses concise and conversational."
+                    "\n8. NEVER ask for contact details at the very beginning or while they still have product questions."
+                    "\n9. NEVER repeat a question you have already asked."
+                    "\n10. Keep responses concise (under 60 words) and conversational."
                 )
                 
                 content += lead_gen_instruction

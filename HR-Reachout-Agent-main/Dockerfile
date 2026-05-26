@@ -30,4 +30,6 @@ RUN mkdir -p temp_files
 
 EXPOSE 8000
 
+ENV REDIS_URL=redis://localhost:6379
+
 CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "FastAPI-server.main:app"]

@@ -1,0 +1,28 @@
+{
+  "OpenAI": {
+    "model": "gpt-4o-mini",
+    "temperature": 0.7,
+    "Key": "sk-REPLACE_ME"
+  },
+  "weaviate": {
+    "url": "http://127.0.0.1:8080",
+    "api_key": ""
+  },
+  "cohere": {
+    "api_key": "REPLACE_ME"
+  },
+  "Redis": {
+    "url": "redis://127.0.0.1:6379"
+  },
+  "MongoDB": {
+    "uri": "mongodb://127.0.0.1:27017"
+  },
+  "Telegram": {
+    "bots": []
+  },
+  "WhatsApp": {
+    "phone_number_id": "",
+    "access_token": "",
+    "admin_phone": ""
+  }
+}

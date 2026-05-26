@@ -39,8 +39,9 @@ from AgentManager.telegram.chat_session_mapping import (
     get_session_id_for_bot_token
 )
 from AgentManager.telegram.sender import TelegramSender
-from AgentManager.whatsapp_handler import whatsapp_api
+from AgentManager.whatsapp_handler import whatsapp_api, WhatsAppCloudAPI
 from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
+from AgentManager import widget_session_manager as wsm
 
 TICKETS_DB = "tickets_store.json"
 AGENTS_DB = "Agents_store.json"
@@ -564,6 +565,13 @@ async def agent_response_generator(user_input: str, session_id: str, agent_id: s
 async def agent_response_generator_chat(user_input: str, session_id: str, agent_id: str):
     try:
         print("i am received here agent id from user 2", agent_id)
+        agent_cfg = _get_agent_config(agent_id) if agent_id else {}
+        wsm.upsert_session(
+            session_id,
+            agent_id or "",
+            agent_cfg.get("name", ""),
+            channel=wsm.channel_for_session(session_id),
+        )
         response_gen = await query_handler.aprocess_query(user_input, session_id, agent_id)
         full_response = ""
 
@@ -572,8 +580,11 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
                 full_response += chunk
                 yield chunk
 
+        chat_history_handler.add_message(session_id, "user", user_input)
         if full_response:
+            chat_history_handler.add_message(session_id, "assistant", full_response)
             logging.info(f"Response Generated: {full_response}")
+            wsm.touch_activity(session_id, increment_messages=2)
         else:
             logging.info("Some Error has occurred. Unexpected Response")
             yield "Some Error has occurred. Please try once again"
@@ -1124,6 +1135,210 @@ async def admin_ws(websocket: WebSocket, session_id: str):
         agent_ws_manager.disconnect(agent_id)
 
 
+# ─── Widget session & admin dashboard ─────────────────────────────────────────
+
+def _generate_conversation_summary(session_id: str) -> str:
+    try:
+        chat_history = chat_history_handler.get_formatted_history(session_id)
+        if not chat_history or not chat_history.strip():
+            return "No conversation history available."
+        openai_key = config.get("OpenAI", {}).get("Key")
+        if openai_key:
+            os.environ["OPENAI_API_KEY"] = openai_key
+        from llama_index.llms.openai import OpenAI
+        summary_llm = OpenAI(model="gpt-4o-mini", temperature=0.3)
+        summary_prompt = (
+            "Summarize this website widget customer conversation in 3-5 bullet points. "
+            "Include what they asked, any products/services discussed, and contact details if mentioned:\n\n"
+            f"{chat_history}"
+        )
+        summary_resp = summary_llm.complete(summary_prompt)
+        return summary_resp.text.strip()
+    except Exception as e:
+        logging.error(f"[WidgetSummary] Failed: {e}")
+        return "Summary generation failed."
+
+
+async def _whatsapp_credentials_for_agent(agent_id: str) -> Dict[str, str]:
+    """Resolve WhatsApp send credentials: Mongo channel for agent, else config.json."""
+    wa_cfg = config.get("WhatsApp", {})
+    if mongo_db is not None and agent_id:
+        try:
+            doc = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({"ai_agent_id": agent_id})
+            if doc:
+                return {
+                    "admin_phone": doc.get("admin_phone") or wa_cfg.get("admin_phone", ""),
+                    "access_token": doc.get("access_token") or wa_cfg.get("access_token", ""),
+                    "phone_number_id": doc.get("phone_number_id") or wa_cfg.get("phone_number_id", ""),
+                }
+        except Exception as e:
+            logging.warning(f"[WidgetWA] Mongo lookup failed: {e}")
+    return {
+        "admin_phone": wa_cfg.get("admin_phone", ""),
+        "access_token": wa_cfg.get("access_token", ""),
+        "phone_number_id": wa_cfg.get("phone_number_id", ""),
+    }
+
+
+async def _complete_widget_chat(session_id: str, reason: str = "inactivity") -> Dict[str, Any]:
+    existing = wsm.get_session(session_id)
+    if existing and existing.get("status") == "completed":
+        return existing
+
+    agent_id = (existing or {}).get("agent_id", "")
+    contact = (existing or {}).get("contact") or {}
+    summary = _generate_conversation_summary(session_id)
+
+    lead_data = {
+        "session_id": session_id,
+        "name": contact.get("name") or "Unknown",
+        "email": contact.get("email") or "Not provided",
+        "phone": contact.get("phone") or "Not provided",
+        "summary": summary,
+    }
+
+    creds = await _whatsapp_credentials_for_agent(agent_id)
+    wa = WhatsAppCloudAPI(
+        phone_number_id=creds.get("phone_number_id"),
+        access_token=creds.get("access_token"),
+        admin_phone=creds.get("admin_phone"),
+    )
+    wa_result = wa.send_lead_notification(lead_data)
+    whatsapp_sent = wa_result.get("status") == "success"
+
+    record = wsm.mark_completed(session_id, reason=reason, summary=summary, whatsapp_sent=whatsapp_sent)
+    if not record:
+        record = wsm.upsert_session(session_id, agent_id)
+        record = wsm.mark_completed(session_id, reason=reason, summary=summary, whatsapp_sent=whatsapp_sent)
+
+    # Also append to leads_store for unified lead list
+    try:
+        leads = []
+        if os.path.exists(LEADS_DB):
+            with open(LEADS_DB, "r", encoding="utf-8") as f:
+                leads = json.load(f)
+        leads.append({
+            **lead_data,
+            "captured_at": datetime.utcnow().isoformat(),
+            "whatsapp_sent": whatsapp_sent,
+            "source": "website_widget",
+            "completion_reason": reason,
+        })
+        with open(LEADS_DB, "w", encoding="utf-8") as f:
+            json.dump(leads, f, indent=2)
+    except Exception as e:
+        logging.error(f"[WidgetComplete] leads save failed: {e}")
+
+    return record or {}
+
+
+class WidgetSessionStart(BaseModel):
+    session_id: str
+    agent_id: str
+    origin: Optional[str] = ""
+    page_url: Optional[str] = ""
+
+
+class WidgetContactUpdate(BaseModel):
+    session_id: str
+    name: Optional[str] = ""
+    email: Optional[str] = ""
+    phone: Optional[str] = ""
+
+
+class WidgetSessionComplete(BaseModel):
+    session_id: str
+    reason: Optional[str] = "inactivity"
+
+
+@app.post("/widget/session/start")
+async def widget_session_start(body: WidgetSessionStart):
+    if not body.session_id or not body.agent_id:
+        raise HTTPException(status_code=400, detail="session_id and agent_id required")
+    agent_cfg = _get_agent_config(body.agent_id)
+    record = wsm.upsert_session(
+        body.session_id,
+        body.agent_id,
+        agent_cfg.get("name", ""),
+        origin=body.origin or "",
+        page_url=body.page_url or "",
+    )
+    return {"status": "ok", "session": record}
+
+
+@app.post("/widget/session/contact")
+async def widget_session_contact(body: WidgetContactUpdate):
+    if not body.session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    record = wsm.update_contact(body.session_id, body.name or "", body.email or "", body.phone or "")
+    if not record:
+        agent_id = ""
+        record = wsm.upsert_session(body.session_id, agent_id)
+        record = wsm.update_contact(body.session_id, body.name or "", body.email or "", body.phone or "")
+    return {"status": "ok", "session": record}
+
+
+@app.post("/widget/session/complete")
+async def widget_session_complete(body: WidgetSessionComplete):
+    if not body.session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    record = await _complete_widget_chat(body.session_id, reason=body.reason or "inactivity")
+    return {
+        "status": "completed",
+        "whatsapp_sent": record.get("whatsapp_sent") if record else False,
+        "session": record,
+    }
+
+
+@app.get("/dashboard/stats")
+async def dashboard_stats(days: int = 30):
+    stats = wsm.compute_stats(days=days, chat_history_handler=chat_history_handler)
+    try:
+        if os.path.exists(LEADS_DB):
+            with open(LEADS_DB, "r", encoding="utf-8") as f:
+                leads = json.load(f)
+            stats["total_leads"] = len(leads) if isinstance(leads, list) else 0
+        else:
+            stats["total_leads"] = stats.get("leads_with_contact", 0)
+    except Exception:
+        stats["total_leads"] = stats.get("leads_with_contact", 0)
+    return stats
+
+
+@app.get("/dashboard/sessions")
+async def dashboard_sessions(status: Optional[str] = None, agent_id: Optional[str] = None, limit: int = 100):
+    return wsm.list_sessions(
+        status=status,
+        agent_id=agent_id,
+        limit=limit,
+        chat_history_handler=chat_history_handler,
+    )
+
+
+@app.get("/dashboard/sessions/{session_id}")
+async def dashboard_session_detail(session_id: str):
+    meta = wsm.get_session(session_id)
+    if not meta:
+        history = chat_history_handler.get_chat_history(session_id)
+        if not history:
+            raise HTTPException(status_code=404, detail="Session not found")
+        meta = wsm._enrich_record(wsm._session_from_redis(session_id, len(history)))
+        agent_cfg = _get_agent_config(meta.get("agent_id", ""))
+        if agent_cfg.get("name"):
+            meta["agent_name"] = agent_cfg["name"]
+    try:
+        history = chat_history_handler.get_chat_history(session_id)
+        messages = []
+        for msg in history:
+            role = str(getattr(msg, "role", "assistant")).lower()
+            content = getattr(msg, "content", "")
+            messages.append({"role": role, "content": content})
+    except Exception as e:
+        logging.error(f"[Dashboard] history load failed: {e}")
+        messages = []
+    return {"session": meta, "messages": messages}
+
+
 @app.on_event("startup")
 async def setup_webhooks():
     global mongo_client, mongo_db
@@ -1140,8 +1355,12 @@ async def setup_webhooks():
     # Sometimes, Telegram webhooks fail during FastAPI cold startup if the public domain isn’t reachable yet (e.g., in ngrok, Docker, Cloud Run).
     await asyncio.sleep(2)  # Give services a bit of time to settle
     try:
-        # Replace with your actual public URL or tunnel URL (e.g. ngrok)
-        BASE_WEBHOOK_URL = "https://b65c-2405-201-101b-482a-151e-6624-2510-d0fd.ngrok-free.app"  # Change this
+        BASE_WEBHOOK_URL = (os.getenv("TELEGRAM_WEBHOOK_BASE_URL") or "").strip().rstrip("/")
+        if not BASE_WEBHOOK_URL:
+            logging.warning(
+                "[Webhook Setup] TELEGRAM_WEBHOOK_BASE_URL not set; skipping Telegram webhook registration."
+            )
+            return
 
         for bot in config["Telegram"]["bots"]:
             bot_token = bot["bot_token"]
