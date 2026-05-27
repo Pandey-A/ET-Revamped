@@ -150,8 +150,10 @@ class QueryHandler:
             "\n\nSTRICT RESPONSE POLICY:\n"
             "1) Respond naturally in chat style. Do NOT prefix replies with agent/company labels.\n"
             "2) Answer ONLY from knowledge base facts. Do not guess or invent details.\n"
-            "3) If requested info is not in knowledge base, reply EXACTLY:\n"
-            "\"I dont know about that specific thing. We will transfer your conversation to a human agent.\"\n"
+            "3) If question is out of scope (not about company/KB), reply EXACTLY:\n"
+            f"\"sorry i cant answer that specific question but you can ask me about the {company_name}.\"\n"
+            "4) If question is about company but KB has no relevant info, reply EXACTLY:\n"
+            "\"transferring to Human agent\"\n"
             "4) Never answer out-of-scope questions with made-up information.\n"
             "5) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
@@ -181,7 +183,7 @@ class QueryHandler:
     def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
         text = (reply or "").strip()
         if not text:
-            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+            return "transferring to Human agent"
 
         lower = text.lower()
         unknown_markers = [
@@ -195,7 +197,7 @@ class QueryHandler:
             "i cannot find",
         ]
         if any(m in lower for m in unknown_markers):
-            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+            return "transferring to Human agent"
 
         # Prevent stale repeated assistant responses on new turns.
         last_assistant = None
@@ -205,7 +207,7 @@ class QueryHandler:
                 last_assistant = (getattr(msg, "content", "") or "").strip()
                 break
         if last_assistant and last_assistant == text:
-            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+            return "transferring to Human agent"
         return text
     # === ADD: end helper methods ===
 
@@ -266,8 +268,11 @@ class QueryHandler:
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
             if self._is_out_of_scope_query(user_input):
+                out_scope = (
+                    f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+                )
                 return self._non_streaming_async_gen(
-                    "I dont know about that specific thing. We will transfer your conversation to a human agent."
+                    out_scope
                 )
 
             # Run synchronous monitoring directly to avoid PyTorch deadlock on macOS threads
@@ -383,8 +388,11 @@ class QueryHandler:
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
             if self._is_out_of_scope_query(user_input):
+                out_scope = (
+                    f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+                )
                 return self._non_streaming_sync_gen(
-                    "I dont know about that specific thing. We will transfer your conversation to a human agent."
+                    out_scope
                 )
 
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
