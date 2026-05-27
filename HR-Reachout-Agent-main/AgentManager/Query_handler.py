@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional, List, AsyncIterator, Iterator
 import asyncio
 import logging
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -15,6 +16,7 @@ from AgentManager import (
 from AgentManager.MonitoringAgent import hybrid_monitoring_agent
 from AgentManager.ActionAgent import action_agent_handler
 from AgentManager.CoreAgent import core_agent
+from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 
 
 class QueryHandler:
@@ -149,36 +151,113 @@ class QueryHandler:
         return (
             "\n\nSTRICT RESPONSE POLICY:\n"
             "1) Respond naturally in chat style. Do NOT prefix replies with agent/company labels.\n"
-            "2) Answer ONLY from knowledge base facts. Do not guess or invent details.\n"
+            "2) Answer ONLY from knowledge base facts retrieved via knowledge_source. "
+            "Never use general world knowledge, trivia, geography, math, news, or anything not in the KB.\n"
             "3) If question is out of scope (not about company/KB), reply EXACTLY:\n"
             f"\"sorry i cant answer that specific question but you can ask me about the {company_name}.\"\n"
             "4) If question is about company but KB has no relevant info, reply EXACTLY:\n"
             "\"transferring to Human agent\"\n"
-            "4) Never answer out-of-scope questions with made-up information.\n"
-            "5) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
+            "5) Never answer out-of-scope questions with made-up information.\n"
+            "6) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
 
-    def _is_out_of_scope_query(self, user_input: str) -> bool:
+    def _is_brief_social_message(self, user_input: str) -> bool:
+        """Short greetings/thanks — skip strict KB preflight so UX stays natural."""
+        q = (user_input or "").strip().lower()
+        if not q or len(q) > 80:
+            return False
+        patterns = (
+            r"^(hi|hello|hey|hii|helo)\b[\s!.,?]*$",
+            r"^(good\s+(morning|afternoon|evening|night))\b[\s!.,?]*$",
+            r"^(thanks|thank\s+you|thx|ty)\b[\s!.,?]*$",
+            r"^(bye|goodbye|see\s+you)\b[\s!.,?]*$",
+            r"^(ok|okay|k)\b[\s!.,?]*$",
+            r"^(namaste|namaskar)\b[\s!.,?]*$",
+        )
+        return any(re.match(p, q) for p in patterns)
+
+    def _kb_hit_from_rag(self, rag_result: Dict[str, Any]) -> bool:
+        sol = rag_result.get("solution")
+        if isinstance(sol, dict):
+            chunk = (sol.get("chunk") or "").strip()
+            return bool(chunk)
+        return False
+
+    def _query_contains_term(self, q: str, term: str) -> bool:
+        """Match whole words/phrases so 'api' does not match inside 'capital'."""
+        t = (term or "").strip().lower()
+        if not t:
+            return False
+        if " " in t:
+            return t in q
+        return re.search(rf"\b{re.escape(t)}\b", q) is not None
+
+    def _is_company_related_query(self, user_input: str, company_name: str) -> bool:
+        """Heuristic: likely about this business vs random trivia."""
         q = (user_input or "").strip().lower()
         if not q:
             return False
-        out_scope_markers = [
-            "temperature",
-            "weather",
-            "forecast",
-            "rain",
-            "humidity",
-            "stock price",
-            "bitcoin",
-            "crypto",
-            "match score",
-            "sports score",
-            "news today",
-            "movie recommendation",
-            "tell me a joke",
-            "horoscope",
-        ]
-        return any(k in q for k in out_scope_markers)
+        cn = (company_name or "").strip().lower()
+        if cn and cn in q:
+            return True
+        for token in cn.split():
+            if len(token) >= 4 and self._query_contains_term(q, token):
+                return True
+        markers = (
+            "your company",
+            "your product",
+            "your platform",
+            "your service",
+            "your app",
+            "your pricing",
+            "your team",
+            "this company",
+            "this platform",
+            "this product",
+            "what do you do",
+            "who are you",
+            "tell me about you",
+            "pricing",
+            "subscription",
+            "billing",
+            "invoice",
+            "upload",
+            "dashboard",
+            "sign up",
+            "signup",
+            "sign-up",
+            "register",
+            "login",
+            "account",
+            "password",
+            "documentation",
+            "knowledge base",
+            "widget",
+            "whatsapp",
+            "api",
+            "demo",
+            "contact sales",
+            "support",
+            "elevatetrust",
+            "deepfake",
+        )
+        return any(self._query_contains_term(q, m) for m in markers)
+
+    def _fallback_after_rag_miss(
+        self, user_input: str, company_name: str, rag_result: Dict[str, Any]
+    ) -> str:
+        sol = rag_result.get("solution", "")
+        if isinstance(sol, str) and "error occurred during retrieval" in sol.lower():
+            return "transferring to Human agent"
+        if self._is_company_related_query(user_input, company_name):
+            return "transferring to Human agent"
+        return f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+
+    def _run_rag_preflight(self, user_input: str, collection_name: str) -> Dict[str, Any]:
+        return knowledge_management_handler.rag_function(
+            query=(user_input or "").strip(),
+            collection_name=collection_name,
+        )
 
     def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
         text = (reply or "").strip()
@@ -267,13 +346,19 @@ class QueryHandler:
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
-            if self._is_out_of_scope_query(user_input):
-                out_scope = (
-                    f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+
+            collection_name = self._get_collection_from_store(agent_id)
+            company_name = self._get_name_from_store(agent_id)
+
+            if not self._is_brief_social_message(user_input):
+                rag_preflight = await asyncio.to_thread(
+                    self._run_rag_preflight, user_input, collection_name
                 )
-                return self._non_streaming_async_gen(
-                    out_scope
-                )
+                if not self._kb_hit_from_rag(rag_preflight):
+                    fallback = self._fallback_after_rag_miss(
+                        user_input, company_name, rag_preflight
+                    )
+                    return self._non_streaming_async_gen(fallback)
 
             # Run synchronous monitoring directly to avoid PyTorch deadlock on macOS threads
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
@@ -282,10 +367,8 @@ class QueryHandler:
                 chat_history
             )
             
-            collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
-            company_name = self._get_name_from_store(agent_id)
             content += self._policy_instruction(company_name)
             
             # For website widget / anonymous sessions, inject lead-gen behavior
@@ -387,13 +470,17 @@ class QueryHandler:
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
-            if self._is_out_of_scope_query(user_input):
-                out_scope = (
-                    f"sorry i cant answer that specific question but you can ask me about the {company_name}."
-                )
-                return self._non_streaming_sync_gen(
-                    out_scope
-                )
+
+            collection_name = self._get_collection_from_store(agent_id)
+            company_name = self._get_name_from_store(agent_id)
+
+            if not self._is_brief_social_message(user_input):
+                rag_preflight = self._run_rag_preflight(user_input, collection_name)
+                if not self._kb_hit_from_rag(rag_preflight):
+                    fallback = self._fallback_after_rag_miss(
+                        user_input, company_name, rag_preflight
+                    )
+                    return self._non_streaming_sync_gen(fallback)
 
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
                 user_input,
@@ -401,10 +488,8 @@ class QueryHandler:
                 chat_history
             )
             print(f"Monitoring result: {monitoring_result}")
-            collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
-            company_name = self._get_name_from_store(agent_id)
             content += self._policy_instruction(company_name)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
