@@ -6,7 +6,7 @@ export const metadata = {
   description: "Privacy policy and app details for Elevate Trust.",
 };
 
-const APP_DOMAIN = process.env.NEXT_PUBLIC_APP_ORIGIN || "https://elevatetrust.in";
+const APP_DOMAIN = "elevatetrust.in";
 const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "support@elevatetrust.in";
 const APP_ICON = "/chatops-icon.png";
 const CATEGORY = "Security & Deepfake Detection";
