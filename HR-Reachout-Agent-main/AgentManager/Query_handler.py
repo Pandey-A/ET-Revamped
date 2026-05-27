@@ -25,7 +25,7 @@ _COMPANY_KB_MISS_REPLY = (
 )
 
 _OUT_OF_SCOPE_TEMPLATE = (
-    "Sorry, I can't answer that. You can ask me anything about {company_name} from the knowledge base."
+    "Sorry, I can't answer that. You can ask me anything about {company_name}."
 )
 
 
@@ -145,16 +145,42 @@ class QueryHandler:
             self.logger.error(f"[AgentConfig] Error fetching model for {agent_id}: {e}", exc_info=True)
         return None
 
-    def _get_name_from_store(self, agent_id: Optional[str]) -> str:
-        """Fetch agent/company display name from Agents_store.json for given agent_id."""
+    def _get_agent_record(self, agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not agent_id:
+            return None
         try:
             with open("Agents_store.json", "r", encoding="utf-8") as f:
                 agents = json.load(f)
             for a in agents:
                 if a.get("id") == agent_id:
-                    return (a.get("name") or "ElevateTrust").strip()
-        except Exception:
-            pass
+                    return a
+        except Exception as e:
+            self.logger.error(f"[AgentConfig] Error loading agent {agent_id}: {e}", exc_info=True)
+        return None
+
+    def _get_company_name_from_store(self, agent_id: Optional[str]) -> str:
+        """Company/brand name for user-facing replies (not the agent bot display name)."""
+        agent = self._get_agent_record(agent_id)
+        if not agent:
+            return "ElevateTrust"
+
+        explicit = (agent.get("company_name") or agent.get("companyName") or "").strip()
+        if explicit:
+            return explicit
+
+        desc = (agent.get("description") or "")
+        resources = " ".join(str(r) for r in (agent.get("resource_list") or []))
+        blob = f"{desc} {resources}".lower()
+        if "elevatetrust" in blob or "elevate trust" in blob:
+            return "ElevateTrust"
+
+        display = (agent.get("name") or "").strip()
+        for suffix in (" Assistant", " Agent", " Bot", " Chatbot", " Support"):
+            if display.endswith(suffix):
+                display = display[: -len(suffix)].strip()
+        if display and "assistant" not in display.lower():
+            return display
+
         return "ElevateTrust"
 
     def _policy_instruction(self, company_name: str) -> str:
@@ -464,7 +490,7 @@ class QueryHandler:
                 return {'response': 'Please provide a valid query'}
 
             collection_name = self._get_collection_from_store(agent_id)
-            company_name = self._get_name_from_store(agent_id)
+            company_name = self._get_company_name_from_store(agent_id)
             is_social = self._is_brief_social_message(user_input)
             kb_context = None
 
@@ -592,7 +618,7 @@ class QueryHandler:
                 return {'response': 'Please provide a valid query'}
 
             collection_name = self._get_collection_from_store(agent_id)
-            company_name = self._get_name_from_store(agent_id)
+            company_name = self._get_company_name_from_store(agent_id)
             is_social = self._is_brief_social_message(user_input)
             kb_context = None
 
