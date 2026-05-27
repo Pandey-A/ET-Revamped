@@ -19,8 +19,8 @@ weaviate_url = config["weaviate"]["url"]
 weaviate_api_key = config["weaviate"].get("api_key", None)
 cohere_api_key = config["cohere"]["api_key"]
 bedrock_cfg = config.get("Bedrock", {})
-# Ignore KB hits when Cohere rerank score is below this (filters trivia/unrelated queries).
-MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.28))
+# Ignore weak KB matches when Cohere rerank score is below this (filters trivia/unrelated queries).
+MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.18))
 
 os.environ["COHERE_API_KEY"] = cohere_api_key
 co = cohere.Client()
@@ -117,9 +117,12 @@ class RAG:
                 if score is None or score < MIN_RERANK_RELEVANCE:
                     print(
                         f"[RAG] Best relevance {score} below threshold "
-                        f"{MIN_RERANK_RELEVANCE} — treating as no KB match"
+                        f"{MIN_RERANK_RELEVANCE} — weak match only"
                     )
-                    return None
+                    return {
+                        "weak_match": True,
+                        "relevance_score": score,
+                    }
                 return {
                     "chunk": doc_texts[best.index],
                     "relevance_score": score,

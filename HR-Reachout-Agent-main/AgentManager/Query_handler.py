@@ -185,9 +185,77 @@ class QueryHandler:
     def _kb_hit_from_rag(self, rag_result: Dict[str, Any]) -> bool:
         sol = rag_result.get("solution")
         if isinstance(sol, dict):
+            if sol.get("weak_match"):
+                return False
             chunk = (sol.get("chunk") or "").strip()
             return bool(chunk)
         return False
+
+    def _rag_relevance_score(self, rag_result: Dict[str, Any]) -> Optional[float]:
+        sol = rag_result.get("solution")
+        if isinstance(sol, dict):
+            score = sol.get("relevance_score")
+            if score is not None:
+                return float(score)
+        return None
+
+    def _out_of_scope_reply(self, company_name: str) -> str:
+        return (
+            f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+        )
+
+    def _is_likely_general_knowledge_query(self, user_input: str) -> bool:
+        """Trivia / world knowledge — not answerable from a company KB."""
+        q = (user_input or "").strip().lower()
+        if not q:
+            return False
+        regex_patterns = (
+            r"\bcapital of\b",
+            r"\bpopulation of\b",
+            r"\bwho (is|was) the (president|prime minister|king|queen)\b",
+            r"\bhow old is\b",
+            r"\bwhen was .+ born\b",
+            r"\bwhat is \d+\s*[\+\-\*\/]",
+            r"\bwho won (the )?(world cup|match|game)\b",
+        )
+        if any(re.search(p, q) for p in regex_patterns):
+            return True
+        markers = (
+            "temperature",
+            "weather",
+            "forecast",
+            "rain",
+            "humidity",
+            "stock price",
+            "bitcoin",
+            "crypto",
+            "match score",
+            "sports score",
+            "news today",
+            "movie recommendation",
+            "tell me a joke",
+            "horoscope",
+            "recipe for",
+            "convert usd to",
+        )
+        return any(self._query_contains_term(q, m) if len(m) <= 5 else m in q for m in markers)
+
+    def _maybe_block_unrelated_query(
+        self, user_input: str, company_name: str, rag_result: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Hard-block only obvious general-knowledge questions with no strong KB match.
+        Company/KB questions always continue to the agent even if preflight is weak.
+        """
+        if self._is_company_related_query(user_input, company_name):
+            return None
+        if not self._is_likely_general_knowledge_query(user_input):
+            return None
+        if self._kb_hit_from_rag(rag_result):
+            score = self._rag_relevance_score(rag_result)
+            if score is not None and score >= 0.4:
+                return None
+        return self._out_of_scope_reply(company_name)
 
     def _query_contains_term(self, q: str, term: str) -> bool:
         """Match whole words/phrases so 'api' does not match inside 'capital'."""
@@ -248,16 +316,6 @@ class QueryHandler:
             "deepfake",
         )
         return any(self._query_contains_term(q, m) for m in markers)
-
-    def _fallback_after_rag_miss(
-        self, user_input: str, company_name: str, rag_result: Dict[str, Any]
-    ) -> str:
-        sol = rag_result.get("solution", "")
-        if isinstance(sol, str) and "error occurred during retrieval" in sol.lower():
-            return _COMPANY_KB_MISS_REPLY
-        if self._is_company_related_query(user_input, company_name):
-            return _COMPANY_KB_MISS_REPLY
-        return f"sorry i cant answer that specific question but you can ask me about the {company_name}."
 
     def _run_rag_preflight(self, user_input: str, collection_name: str) -> Dict[str, Any]:
         return knowledge_management_handler.rag_function(
@@ -360,11 +418,11 @@ class QueryHandler:
                 rag_preflight = await asyncio.to_thread(
                     self._run_rag_preflight, user_input, collection_name
                 )
-                if not self._kb_hit_from_rag(rag_preflight):
-                    fallback = self._fallback_after_rag_miss(
-                        user_input, company_name, rag_preflight
-                    )
-                    return self._non_streaming_async_gen(fallback)
+                blocked = self._maybe_block_unrelated_query(
+                    user_input, company_name, rag_preflight
+                )
+                if blocked:
+                    return self._non_streaming_async_gen(blocked)
 
             # Run synchronous monitoring directly to avoid PyTorch deadlock on macOS threads
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
@@ -479,11 +537,11 @@ class QueryHandler:
 
             if not self._is_brief_social_message(user_input):
                 rag_preflight = self._run_rag_preflight(user_input, collection_name)
-                if not self._kb_hit_from_rag(rag_preflight):
-                    fallback = self._fallback_after_rag_miss(
-                        user_input, company_name, rag_preflight
-                    )
-                    return self._non_streaming_sync_gen(fallback)
+                blocked = self._maybe_block_unrelated_query(
+                    user_input, company_name, rag_preflight
+                )
+                if blocked:
+                    return self._non_streaming_sync_gen(blocked)
 
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
                 user_input,
