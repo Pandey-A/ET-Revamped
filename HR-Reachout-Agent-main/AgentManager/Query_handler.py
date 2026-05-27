@@ -24,6 +24,10 @@ _COMPANY_KB_MISS_REPLY = (
     "If you have further queries, please drop a note to info@elevatetrust.ai."
 )
 
+_OUT_OF_SCOPE_TEMPLATE = (
+    "Sorry, I can't answer that. You can ask me anything about {company_name} from the knowledge base."
+)
+
 
 class QueryHandler:
     def __init__(self):
@@ -160,7 +164,7 @@ class QueryHandler:
             "2) Answer ONLY from knowledge base facts retrieved via knowledge_source. "
             "Never use general world knowledge, trivia, geography, math, news, or anything not in the KB.\n"
             "3) If question is out of scope (not about company/KB), reply EXACTLY:\n"
-            f"\"sorry i cant answer that specific question but you can ask me about the {company_name}.\"\n"
+            f"\"{_OUT_OF_SCOPE_TEMPLATE.format(company_name=company_name)}\"\n"
             "4) If question is about company but KB has no relevant info, reply EXACTLY:\n"
             f"\"{_COMPANY_KB_MISS_REPLY}\"\n"
             "5) Never answer out-of-scope questions with made-up information.\n"
@@ -200,12 +204,24 @@ class QueryHandler:
         return None
 
     def _out_of_scope_reply(self, company_name: str) -> str:
+        return _OUT_OF_SCOPE_TEMPLATE.format(company_name=company_name)
+
+    def _kb_chunk_from_rag(self, rag_result: Dict[str, Any]) -> str:
+        sol = rag_result.get("solution")
+        if isinstance(sol, dict) and not sol.get("weak_match"):
+            return (sol.get("chunk") or "").strip()
+        return ""
+
+    def _kb_context_instruction(self, kb_context: str) -> str:
         return (
-            f"sorry i cant answer that specific question but you can ask me about the {company_name}."
+            "\n\nKNOWLEDGE BASE EXCERPT (ONLY source of truth — do NOT use general/world knowledge):\n"
+            f"---\n{kb_context}\n---\n"
+            "Answer using ONLY the excerpt above. If it does not contain the answer, reply EXACTLY:\n"
+            f"\"{_COMPANY_KB_MISS_REPLY}\""
         )
 
     def _is_likely_general_knowledge_query(self, user_input: str) -> bool:
-        """Trivia / world knowledge — not answerable from a company KB."""
+        """Trivia / world knowledge — never answer from LLM training data."""
         q = (user_input or "").strip().lower()
         if not q:
             return False
@@ -217,6 +233,14 @@ class QueryHandler:
             r"\bwhen was .+ born\b",
             r"\bwhat is \d+\s*[\+\-\*\/]",
             r"\bwho won (the )?(world cup|match|game)\b",
+            r"\bhow (hot|cold) is\b",
+            r"\bdegrees?\s*(celsius|fahrenheit|f)\b",
+            r"\bwhat('s| is) the (time|date) in\b",
+            r"\bcurrent time in\b",
+            r"\btranslate .+ (to|into)\b",
+            r"\bdefine the word\b",
+            r"\bmeaning of the word\b",
+            r"\bsolve (this|the) (equation|problem)\b",
         )
         if any(re.search(p, q) for p in regex_patterns):
             return True
@@ -237,25 +261,44 @@ class QueryHandler:
             "horoscope",
             "recipe for",
             "convert usd to",
+            "cricket score",
+            "football score",
+            "exchange rate",
+            "gold price",
+            "petrol price",
+            "diesel price",
+            "earthquake",
+            "sunrise",
+            "sunset",
         )
-        return any(self._query_contains_term(q, m) if len(m) <= 5 else m in q for m in markers)
+        return any(self._query_contains_term(q, m) if len(m) <= 6 else m in q for m in markers)
 
-    def _maybe_block_unrelated_query(
-        self, user_input: str, company_name: str, rag_result: Dict[str, Any]
-    ) -> Optional[str]:
+    def _gate_query(
+        self,
+        user_input: str,
+        company_name: str,
+        rag_result: Dict[str, Any],
+        *,
+        is_social: bool,
+    ) -> Dict[str, Any]:
         """
-        Hard-block only obvious general-knowledge questions with no strong KB match.
-        Company/KB questions always continue to the agent even if preflight is weak.
+        KB-only gate: LLM runs only for brief social messages or when RAG returns a real chunk.
+        General-knowledge / unrelated questions never reach the model.
         """
+        if is_social:
+            return {"allow": True, "kb_context": None}
+
+        if self._is_likely_general_knowledge_query(user_input):
+            return {"allow": False, "message": self._out_of_scope_reply(company_name)}
+
+        kb_context = self._kb_chunk_from_rag(rag_result)
+        if kb_context:
+            return {"allow": True, "kb_context": kb_context}
+
         if self._is_company_related_query(user_input, company_name):
-            return None
-        if not self._is_likely_general_knowledge_query(user_input):
-            return None
-        if self._kb_hit_from_rag(rag_result):
-            score = self._rag_relevance_score(rag_result)
-            if score is not None and score >= 0.4:
-                return None
-        return self._out_of_scope_reply(company_name)
+            return {"allow": False, "message": _COMPANY_KB_MISS_REPLY}
+
+        return {"allow": False, "message": self._out_of_scope_reply(company_name)}
 
     def _query_contains_term(self, q: str, term: str) -> bool:
         """Match whole words/phrases so 'api' does not match inside 'capital'."""
@@ -323,7 +366,16 @@ class QueryHandler:
             collection_name=collection_name,
         )
 
-    def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
+    def _enforce_reply_policy(
+        self,
+        reply: str,
+        company_name: str,
+        chat_history: List[ChatMessage],
+        user_input: Optional[str] = None,
+    ) -> str:
+        if user_input and self._is_likely_general_knowledge_query(user_input):
+            return self._out_of_scope_reply(company_name)
+
         text = (reply or "").strip()
         if not text:
             return _COMPANY_KB_MISS_REPLY
@@ -413,16 +465,19 @@ class QueryHandler:
 
             collection_name = self._get_collection_from_store(agent_id)
             company_name = self._get_name_from_store(agent_id)
+            is_social = self._is_brief_social_message(user_input)
+            kb_context = None
 
-            if not self._is_brief_social_message(user_input):
+            if not is_social:
                 rag_preflight = await asyncio.to_thread(
                     self._run_rag_preflight, user_input, collection_name
                 )
-                blocked = self._maybe_block_unrelated_query(
-                    user_input, company_name, rag_preflight
+                gate = self._gate_query(
+                    user_input, company_name, rag_preflight, is_social=False
                 )
-                if blocked:
-                    return self._non_streaming_async_gen(blocked)
+                if not gate["allow"]:
+                    return self._non_streaming_async_gen(gate["message"])
+                kb_context = gate.get("kb_context")
 
             # Run synchronous monitoring directly to avoid PyTorch deadlock on macOS threads
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
@@ -434,6 +489,8 @@ class QueryHandler:
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
             content += self._policy_instruction(company_name)
+            if kb_context:
+                content += self._kb_context_instruction(kb_context)
             
             # For website widget / anonymous sessions, inject lead-gen behavior
             if (
@@ -498,7 +555,9 @@ class QueryHandler:
             reply = self._extract_chat_text(chat_response).strip()
             if not reply:
                 reply = _COMPANY_KB_MISS_REPLY
-            reply = self._enforce_reply_policy(reply, company_name, chat_history)
+            reply = self._enforce_reply_policy(
+                reply, company_name, chat_history, user_input=user_input
+            )
             return self._non_streaming_async_gen(reply)
 
         except Exception as e:
@@ -534,14 +593,17 @@ class QueryHandler:
 
             collection_name = self._get_collection_from_store(agent_id)
             company_name = self._get_name_from_store(agent_id)
+            is_social = self._is_brief_social_message(user_input)
+            kb_context = None
 
-            if not self._is_brief_social_message(user_input):
+            if not is_social:
                 rag_preflight = self._run_rag_preflight(user_input, collection_name)
-                blocked = self._maybe_block_unrelated_query(
-                    user_input, company_name, rag_preflight
+                gate = self._gate_query(
+                    user_input, company_name, rag_preflight, is_social=False
                 )
-                if blocked:
-                    return self._non_streaming_sync_gen(blocked)
+                if not gate["allow"]:
+                    return self._non_streaming_sync_gen(gate["message"])
+                kb_context = gate.get("kb_context")
 
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
                 user_input,
@@ -552,6 +614,8 @@ class QueryHandler:
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
             content += self._policy_instruction(company_name)
+            if kb_context:
+                content += self._kb_context_instruction(kb_context)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
             # For website widget / anonymous sessions, inject lead-gen behavior
@@ -601,7 +665,10 @@ class QueryHandler:
             chat_history += [ChatMessage(role="system", content=content)]
             chat_response = agent.chat(user_input, chat_history)
             reply = self._enforce_reply_policy(
-                self._extract_chat_text(chat_response), company_name, chat_history
+                self._extract_chat_text(chat_response),
+                company_name,
+                chat_history,
+                user_input=user_input,
             )
             return self._non_streaming_sync_gen(
                 reply

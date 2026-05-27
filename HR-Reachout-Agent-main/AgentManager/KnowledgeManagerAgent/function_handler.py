@@ -20,7 +20,7 @@ weaviate_api_key = config["weaviate"].get("api_key", None)
 cohere_api_key = config["cohere"]["api_key"]
 bedrock_cfg = config.get("Bedrock", {})
 # Ignore weak KB matches when Cohere rerank score is below this (filters trivia/unrelated queries).
-MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.18))
+MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.12))
 
 os.environ["COHERE_API_KEY"] = cohere_api_key
 co = cohere.Client()
