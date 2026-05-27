@@ -15,9 +15,29 @@ function toIso(v) {
   return String(v);
 }
 
+function pickContactFields(agent) {
+  const extra =
+    agent.extra && typeof agent.extra === 'object' && !Array.isArray(agent.extra) ? agent.extra : {};
+  return {
+    widget_contact_email:
+      (typeof agent.widget_contact_email === 'string' && agent.widget_contact_email.trim()) ||
+      (typeof extra.widget_contact_email === 'string' && extra.widget_contact_email.trim()) ||
+      '',
+    whatsapp_contact_email:
+      (typeof agent.whatsapp_contact_email === 'string' && agent.whatsapp_contact_email.trim()) ||
+      (typeof extra.whatsapp_contact_email === 'string' && extra.whatsapp_contact_email.trim()) ||
+      '',
+    company_name:
+      (typeof agent.company_name === 'string' && agent.company_name.trim()) ||
+      (typeof extra.company_name === 'string' && extra.company_name.trim()) ||
+      '',
+  };
+}
+
 async function syncAgentToFastapi(agent) {
   if (!FASTAPI_SYNC) return { skipped: true };
   const url = `${FASTAPI_SYNC}/store/agents`;
+  const contacts = pickContactFields(agent);
   const body = {
     id: agent.id,
     name: agent.name,
@@ -30,6 +50,9 @@ async function syncAgentToFastapi(agent) {
     resource_list: agent.resource_list || [],
     created_at: toIso(agent.created_at),
     public_embed: agent.public_embed !== false,
+    widget_contact_email: contacts.widget_contact_email,
+    whatsapp_contact_email: contacts.whatsapp_contact_email,
+    company_name: contacts.company_name,
   };
   const r = await fetch(url, {
     method: 'POST',
@@ -88,6 +111,17 @@ router.post('/agents', authMiddleware, async (req, res) => {
         : `${name.replace(/\s+/g, '_')}_${id}`;
     const resource_list = Array.isArray(body.resource_list) ? body.resource_list : [];
     const public_embed = body.public_embed !== false;
+    const widget_contact_email =
+      typeof body.widget_contact_email === 'string' ? body.widget_contact_email.trim() : '';
+    const whatsapp_contact_email =
+      typeof body.whatsapp_contact_email === 'string' ? body.whatsapp_contact_email.trim() : '';
+    const company_name = typeof body.company_name === 'string' ? body.company_name.trim() : '';
+    const extra = {
+      ...(typeof body.extra === 'object' && body.extra !== null ? body.extra : {}),
+      widget_contact_email,
+      whatsapp_contact_email,
+      company_name,
+    };
 
     const existing = await aiAgentRepo.findById(id);
     if (existing) {
@@ -106,7 +140,7 @@ router.post('/agents', authMiddleware, async (req, res) => {
       collection_name,
       resource_list,
       public_embed,
-      extra: typeof body.extra === 'object' && body.extra !== null ? body.extra : {},
+      extra,
     });
 
     const agent = await aiAgentRepo.findByIdForOwner(id, req.user.id);
@@ -136,6 +170,60 @@ router.post('/agents', authMiddleware, async (req, res) => {
       return res.status(409).json({ success: false, message: 'Duplicate agent id' });
     }
     return res.status(500).json({ success: false, message: 'Failed to create agent' });
+  }
+});
+
+router.patch('/agents/:id', authMiddleware, async (req, res) => {
+  try {
+    const agentId = String(req.params.id);
+    const existing = await aiAgentRepo.findByIdForOwner(agentId, req.user.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim();
+    if (typeof body.description === 'string') patch.description = body.description.trim();
+    if (typeof body.greeting_message === 'string') patch.greeting_message = body.greeting_message.trim();
+    if (typeof body.model === 'string' && body.model.trim()) patch.model = body.model.trim();
+    if (body.temperature !== undefined) patch.temperature = Number(body.temperature);
+    if (typeof body.escalation_channel === 'string') patch.escalation_channel = body.escalation_channel.trim();
+
+    const extra = { ...(existing.extra || {}) };
+    if (typeof body.widget_contact_email === 'string') {
+      extra.widget_contact_email = body.widget_contact_email.trim();
+    }
+    if (typeof body.whatsapp_contact_email === 'string') {
+      extra.whatsapp_contact_email = body.whatsapp_contact_email.trim();
+    }
+    if (typeof body.company_name === 'string') {
+      extra.company_name = body.company_name.trim();
+    }
+    patch.extra = extra;
+
+    const agent = await aiAgentRepo.updateAgentForOwner(agentId, req.user.id, patch);
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    if (FASTAPI_SYNC) {
+      try {
+        await syncAgentToFastapi(agent);
+      } catch (syncErr) {
+        console.error('FastAPI agent sync failed:', syncErr);
+        return res.status(502).json({
+          success: false,
+          message: 'Saved locally but could not sync to AI runtime.',
+          detail: syncErr.message || String(syncErr),
+        });
+      }
+    }
+
+    return res.json({ success: true, agent });
+  } catch (e) {
+    console.error('patch agent', e);
+    return res.status(500).json({ success: false, message: 'Failed to update agent' });
   }
 });
 

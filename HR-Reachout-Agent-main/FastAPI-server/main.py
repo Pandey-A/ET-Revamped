@@ -891,17 +891,24 @@ async def upload_agent_data(request: Request):
         else:
             existing_data = []
 
-        agent_ids = [agent.get("id") for agent in existing_data]
+        agent_id = agent_data.get("id")
+        updated = False
+        for idx, agent in enumerate(existing_data):
+            if agent.get("id") == agent_id:
+                merged = {**agent, **agent_data}
+                existing_data[idx] = merged
+                updated = True
+                break
 
-        if agent_data.get("id") in agent_ids:
-            return {"message": "Agent with this ID already exists. Skipped saving."}
-
-        existing_data.append(agent_data)
+        if not updated:
+            existing_data.append(agent_data)
 
         with open(AGENTS_DB, "w") as file:
             json.dump(existing_data, file, indent=4)
 
-        return {"message": "Agent saved successfully"}
+        return {
+            "message": "Agent updated successfully" if updated else "Agent saved successfully"
+        }
 
     except Exception as e:
         traceback.print_exc()

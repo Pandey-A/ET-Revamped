@@ -23,6 +23,7 @@ function mapAgentRow(row) {
 function toClientAgent(row) {
   const a = mapAgentRow(row);
   if (!a) return null;
+  const extra = a.extra || {};
   return {
     id: a.id,
     name: a.name,
@@ -34,6 +35,10 @@ function toClientAgent(row) {
     collection_name: a.collection_name,
     resource_list: a.resource_list,
     public_embed: a.public_embed,
+    widget_contact_email: extra.widget_contact_email || '',
+    whatsapp_contact_email: extra.whatsapp_contact_email || '',
+    company_name: extra.company_name || '',
+    extra,
     created_at: a.created_at,
     updated_at: a.updated_at,
   };
@@ -104,6 +109,49 @@ async function deleteByIdForOwner(agentId, ownerUserId) {
   return (r.rowCount || 0) > 0;
 }
 
+async function updateAgentForOwner(agentId, ownerUserId, patch) {
+  const current = await findByIdForOwner(agentId, ownerUserId);
+  if (!current) return null;
+
+  const name = patch.name !== undefined ? patch.name : current.name;
+  const description = patch.description !== undefined ? patch.description : current.description;
+  const greeting_message =
+    patch.greeting_message !== undefined ? patch.greeting_message : current.greeting_message;
+  const model = patch.model !== undefined ? patch.model : current.model;
+  const temperature =
+    patch.temperature !== undefined && Number.isFinite(Number(patch.temperature))
+      ? Number(patch.temperature)
+      : current.temperature;
+  const escalation_channel =
+    patch.escalation_channel !== undefined ? patch.escalation_channel : current.escalation_channel;
+  const extra = patch.extra !== undefined ? patch.extra : current.extra || {};
+
+  await query(
+    `UPDATE ai_agents SET
+      name = $3,
+      description = $4,
+      greeting_message = $5,
+      model = $6,
+      temperature = $7,
+      escalation_channel = $8,
+      extra = $9::jsonb,
+      updated_at = now()
+     WHERE id = $1 AND owner_user_id = $2`,
+    [
+      String(agentId),
+      String(ownerUserId),
+      name,
+      description,
+      greeting_message,
+      model,
+      temperature,
+      escalation_channel,
+      JSON.stringify(extra),
+    ]
+  );
+  return findByIdForOwner(agentId, ownerUserId);
+}
+
 async function upsertWidgetPreset(agentId, ownerUserId, configJson) {
   await query(
     `INSERT INTO agent_widget_presets (agent_id, owner_user_id, config_json, updated_at)
@@ -129,6 +177,7 @@ module.exports = {
   findById,
   insertAgent,
   deleteByIdForOwner,
+  updateAgentForOwner,
   upsertWidgetPreset,
   getWidgetPreset,
   mapAgentRow,

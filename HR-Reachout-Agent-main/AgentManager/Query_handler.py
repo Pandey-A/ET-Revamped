@@ -18,12 +18,6 @@ from AgentManager.ActionAgent import action_agent_handler
 from AgentManager.CoreAgent import core_agent
 from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 
-# Company-related question but no matching content in the uploaded knowledge base.
-_COMPANY_KB_MISS_REPLY = (
-    "Sorry, I can't answer that. We will transfer your query to our agent. "
-    "Till then, you can ask your other questions here or contact us on info@elevatetrust.ai."
-)
-
 _OUT_OF_SCOPE_TEMPLATE = (
     "Sorry, I can't answer that. You can ask me anything about {company_name}."
 )
@@ -164,7 +158,12 @@ class QueryHandler:
         if not agent:
             return "ElevateTrust"
 
-        explicit = (agent.get("company_name") or agent.get("companyName") or "").strip()
+        explicit = (
+            agent.get("company_name") or agent.get("companyName") or ""
+        ).strip()
+        if not explicit:
+            extra = agent.get("extra") if isinstance(agent.get("extra"), dict) else {}
+            explicit = (extra.get("company_name") or "").strip()
         if explicit:
             return explicit
 
@@ -183,7 +182,61 @@ class QueryHandler:
 
         return "ElevateTrust"
 
-    def _policy_instruction(self, company_name: str) -> str:
+    @staticmethod
+    def _channel_from_session(session_id: str) -> str:
+        sid = session_id or ""
+        if sid.startswith("whatsapp_"):
+            return "whatsapp"
+        if sid.startswith("widget_") or sid.startswith("anon_") or sid.startswith("w_"):
+            return "widget"
+        return "other"
+
+    def _contact_email_for_channel(
+        self, agent: Optional[Dict[str, Any]], channel: str
+    ) -> str:
+        if not agent:
+            return ""
+        if channel == "whatsapp":
+            return (agent.get("whatsapp_contact_email") or "").strip()
+        if channel == "widget":
+            return (
+                agent.get("widget_contact_email") or agent.get("contact_email") or ""
+            ).strip()
+        return (
+            agent.get("widget_contact_email")
+            or agent.get("contact_email")
+            or agent.get("whatsapp_contact_email")
+            or ""
+        ).strip()
+
+    def _company_kb_miss_reply(
+        self,
+        agent_id: Optional[str],
+        session_id: str,
+        company_name: str,
+    ) -> str:
+        channel = self._channel_from_session(session_id)
+        agent = self._get_agent_record(agent_id)
+        email = self._contact_email_for_channel(agent, channel)
+        if not email:
+            return self._out_of_scope_reply(company_name)
+        if channel == "whatsapp":
+            return (
+                "Sorry, I can't answer that. We will transfer your query to our agent on WhatsApp. "
+                f"Till then, you can contact us on {email}."
+            )
+        return (
+            "Sorry, I can't answer that. We will transfer your query to our agent. "
+            f"Till then, you can ask your other questions here or contact us on {email}."
+        )
+
+    def _policy_instruction(
+        self,
+        company_name: str,
+        agent_id: Optional[str] = None,
+        session_id: str = "",
+    ) -> str:
+        kb_miss = self._company_kb_miss_reply(agent_id, session_id, company_name)
         return (
             "\n\nSTRICT RESPONSE POLICY:\n"
             "1) Respond naturally in chat style. Do NOT prefix replies with agent/company labels.\n"
@@ -192,10 +245,16 @@ class QueryHandler:
             "3) If question is out of scope (not about company/KB), reply EXACTLY:\n"
             f"\"{_OUT_OF_SCOPE_TEMPLATE.format(company_name=company_name)}\"\n"
             "4) If question is about company but KB has no relevant info, reply EXACTLY:\n"
-            f"\"{_COMPANY_KB_MISS_REPLY}\"\n"
+            f"\"{kb_miss}\"\n"
             "5) Never answer out-of-scope questions with made-up information.\n"
             "6) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
+
+    def _agent_has_widget_escalation(self, agent_id: Optional[str]) -> bool:
+        return bool(self._contact_email_for_channel(self._get_agent_record(agent_id), "widget"))
+
+    def _agent_has_whatsapp_escalation(self, agent_id: Optional[str]) -> bool:
+        return bool(self._contact_email_for_channel(self._get_agent_record(agent_id), "whatsapp"))
 
     def _is_brief_social_message(self, user_input: str) -> bool:
         """Short greetings/thanks — skip strict KB preflight so UX stays natural."""
@@ -238,12 +297,19 @@ class QueryHandler:
             return (sol.get("chunk") or "").strip()
         return ""
 
-    def _kb_context_instruction(self, kb_context: str) -> str:
+    def _kb_context_instruction(
+        self,
+        kb_context: str,
+        company_name: str,
+        agent_id: Optional[str] = None,
+        session_id: str = "",
+    ) -> str:
+        kb_miss = self._company_kb_miss_reply(agent_id, session_id, company_name)
         return (
             "\n\nKNOWLEDGE BASE EXCERPT (ONLY source of truth — do NOT use general/world knowledge):\n"
             f"---\n{kb_context}\n---\n"
             "Answer using ONLY the excerpt above. If it does not contain the answer, reply EXACTLY:\n"
-            f"\"{_COMPANY_KB_MISS_REPLY}\""
+            f"\"{kb_miss}\""
         )
 
     def _is_likely_general_knowledge_query(self, user_input: str) -> bool:
@@ -306,6 +372,8 @@ class QueryHandler:
         rag_result: Dict[str, Any],
         *,
         is_social: bool,
+        agent_id: Optional[str] = None,
+        session_id: str = "",
     ) -> Dict[str, Any]:
         """
         KB-only gate: LLM runs only for brief social messages or when RAG returns a real chunk.
@@ -324,7 +392,10 @@ class QueryHandler:
         if self._is_company_related_query(
             user_input, company_name
         ) or self._is_likely_business_query(user_input):
-            return {"allow": False, "message": _COMPANY_KB_MISS_REPLY}
+            return {
+                "allow": False,
+                "message": self._company_kb_miss_reply(agent_id, session_id, company_name),
+            }
 
         return {"allow": False, "message": self._out_of_scope_reply(company_name)}
 
@@ -441,13 +512,17 @@ class QueryHandler:
         company_name: str,
         chat_history: List[ChatMessage],
         user_input: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        session_id: str = "",
     ) -> str:
         if user_input and self._is_likely_general_knowledge_query(user_input):
             return self._out_of_scope_reply(company_name)
 
+        kb_miss = self._company_kb_miss_reply(agent_id, session_id, company_name)
+
         text = (reply or "").strip()
         if not text:
-            return _COMPANY_KB_MISS_REPLY
+            return kb_miss
 
         lower = text.lower()
         unknown_markers = [
@@ -461,7 +536,7 @@ class QueryHandler:
             "i cannot find",
         ]
         if any(m in lower for m in unknown_markers):
-            return _COMPANY_KB_MISS_REPLY
+            return kb_miss
 
         # Prevent stale repeated assistant responses on new turns.
         last_assistant = None
@@ -471,7 +546,7 @@ class QueryHandler:
                 last_assistant = (getattr(msg, "content", "") or "").strip()
                 break
         if last_assistant and last_assistant == text:
-            return _COMPANY_KB_MISS_REPLY
+            return kb_miss
         return text
     # === ADD: end helper methods ===
 
@@ -542,7 +617,12 @@ class QueryHandler:
                     self._run_rag_preflight, user_input, collection_name
                 )
                 gate = self._gate_query(
-                    user_input, company_name, rag_preflight, is_social=False
+                    user_input,
+                    company_name,
+                    rag_preflight,
+                    is_social=False,
+                    agent_id=agent_id,
+                    session_id=session_id,
                 )
                 if not gate["allow"]:
                     return self._non_streaming_async_gen(gate["message"])
@@ -557,19 +637,22 @@ class QueryHandler:
             
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
-            content += self._policy_instruction(company_name)
+            content += self._policy_instruction(company_name, agent_id, session_id)
             if kb_context:
-                content += self._kb_context_instruction(kb_context)
+                content += self._kb_context_instruction(
+                    kb_context, company_name, agent_id, session_id
+                )
             
-            # For website widget / anonymous sessions, inject lead-gen behavior
-            if (
+            is_whatsapp = session_id.startswith("whatsapp_")
+            is_widget_channel = (
                 session_id.startswith("anon_")
-                or session_id.startswith("whatsapp_")
                 or session_id.startswith("widget_")
                 or session_id.startswith("w_")
-            ):
-                is_whatsapp = session_id.startswith("whatsapp_")
-                
+            )
+            inject_widget_lead = is_widget_channel and self._agent_has_widget_escalation(agent_id)
+            inject_whatsapp_lead = is_whatsapp and self._agent_has_whatsapp_escalation(agent_id)
+
+            if inject_widget_lead or inject_whatsapp_lead:
                 lead_gen_instruction = (
                     "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
                     "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
@@ -579,11 +662,11 @@ class QueryHandler:
                     "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
                     "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
                 )
-                if is_whatsapp:
+                if inject_whatsapp_lead:
                     lead_gen_instruction += (
                         "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
                     )
-                else:
+                elif inject_widget_lead:
                     lead_gen_instruction += (
                         "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
                         "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
@@ -623,9 +706,14 @@ class QueryHandler:
                 )
             reply = self._extract_chat_text(chat_response).strip()
             if not reply:
-                reply = _COMPANY_KB_MISS_REPLY
+                reply = self._company_kb_miss_reply(agent_id, session_id, company_name)
             reply = self._enforce_reply_policy(
-                reply, company_name, chat_history, user_input=user_input
+                reply,
+                company_name,
+                chat_history,
+                user_input=user_input,
+                agent_id=agent_id,
+                session_id=session_id,
             )
             return self._non_streaming_async_gen(reply)
 
@@ -668,7 +756,12 @@ class QueryHandler:
             if not is_social:
                 rag_preflight = self._run_rag_preflight(user_input, collection_name)
                 gate = self._gate_query(
-                    user_input, company_name, rag_preflight, is_social=False
+                    user_input,
+                    company_name,
+                    rag_preflight,
+                    is_social=False,
+                    agent_id=agent_id,
+                    session_id=session_id,
                 )
                 if not gate["allow"]:
                     return self._non_streaming_sync_gen(gate["message"])
@@ -682,21 +775,23 @@ class QueryHandler:
             print(f"Monitoring result: {monitoring_result}")
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
-            content += self._policy_instruction(company_name)
+            content += self._policy_instruction(company_name, agent_id, session_id)
             if kb_context:
-                content += self._kb_context_instruction(kb_context)
+                content += self._kb_context_instruction(
+                    kb_context, company_name, agent_id, session_id
+                )
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
-            # For website widget / anonymous sessions, inject lead-gen behavior
-            if (
+            is_whatsapp = session_id.startswith("whatsapp_")
+            is_widget_channel = (
                 session_id.startswith("anon_")
-                or session_id.startswith("whatsapp_")
                 or session_id.startswith("widget_")
                 or session_id.startswith("w_")
-            ):
-                is_start = len(chat_history) <= 2
-                is_whatsapp = session_id.startswith("whatsapp_")
-                
+            )
+            inject_widget_lead = is_widget_channel and self._agent_has_widget_escalation(agent_id)
+            inject_whatsapp_lead = is_whatsapp and self._agent_has_whatsapp_escalation(agent_id)
+
+            if inject_widget_lead or inject_whatsapp_lead:
                 lead_gen_instruction = (
                     "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
                     "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
@@ -706,11 +801,11 @@ class QueryHandler:
                     "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
                     "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
                 )
-                if is_whatsapp:
+                if inject_whatsapp_lead:
                     lead_gen_instruction += (
                         "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
                     )
-                else:
+                elif inject_widget_lead:
                     lead_gen_instruction += (
                         "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
                         "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
@@ -738,6 +833,8 @@ class QueryHandler:
                 company_name,
                 chat_history,
                 user_input=user_input,
+                agent_id=agent_id,
+                session_id=session_id,
             )
             return self._non_streaming_sync_gen(
                 reply

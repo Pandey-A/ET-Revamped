@@ -5,16 +5,97 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { useAuth } from '@/context/AuthContext';
-import { fetchMyAgents } from '@/lib/api';
+import { fetchMyAgents, getApiBaseUrl } from '@/lib/api';
+import { getAuthHeaderObject } from '@/lib/authToken';
 import AgentWidgetGeneratorPanel from '@/components/AgentWidgetGeneratorPanel';
-import { ToastContainer } from 'react-toastify';
+import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
 const TABS = [
   { id: 'chat', label: 'Chat', desc: 'Talk to this agent in the full chat workspace.' },
   { id: 'knowledge', label: 'Knowledge base', desc: 'Upload PDFs and URLs to ground this agent.' },
+  { id: 'settings', label: 'Contact & fallback', desc: 'Company name and escalation emails for widget vs WhatsApp.' },
   { id: 'widget', label: 'Widget generator', desc: 'Configure and copy embed code for this agent only.' },
 ];
+
+function AgentContactSettings({ agent, onSaved }) {
+  const [form, setForm] = useState({
+    company_name: agent?.company_name || '',
+    widget_contact_email: agent?.widget_contact_email || '',
+    whatsapp_contact_email: agent?.whatsapp_contact_email || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm({
+      company_name: agent?.company_name || '',
+      widget_contact_email: agent?.widget_contact_email || '',
+      whatsapp_contact_email: agent?.whatsapp_contact_email || '',
+    });
+  }, [agent?.id, agent?.company_name, agent?.widget_contact_email, agent?.whatsapp_contact_email]);
+
+  const handleChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!agent?.id) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/agents/${agent.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaderObject(),
+        },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.detail || 'Failed to save');
+      toast.success('Contact settings saved');
+      onSaved?.(data.agent);
+    } catch (err) {
+      toast.error(err.message || 'Could not save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="aia-form" onSubmit={handleSave} style={{ maxWidth: 520 }}>
+      <div className="aia-form-group">
+        <label>Company name (user-facing)</label>
+        <input name="company_name" value={form.company_name} onChange={handleChange} placeholder="e.g. ElevateTrust" />
+        <p className="aia-form-hint">Shown when the bot cannot answer from the knowledge base.</p>
+      </div>
+      <div className="aia-form-group">
+        <label>Widget contact email</label>
+        <input
+          name="widget_contact_email"
+          type="email"
+          value={form.widget_contact_email}
+          onChange={handleChange}
+          placeholder="info@elevatetrust.ai"
+        />
+        <p className="aia-form-hint">Website widget only: transfer message + ask other questions here.</p>
+      </div>
+      <div className="aia-form-group">
+        <label>WhatsApp contact email</label>
+        <input
+          name="whatsapp_contact_email"
+          type="email"
+          value={form.whatsapp_contact_email}
+          onChange={handleChange}
+          placeholder="Optional — can differ from widget"
+        />
+        <p className="aia-form-hint">WhatsApp only: separate transfer / contact wording.</p>
+      </div>
+      <button type="submit" className="aia-btn aia-btn--primary" disabled={saving}>
+        {saving ? 'Saving…' : 'Save contact settings'}
+      </button>
+    </form>
+  );
+}
 
 function AgentHubInner() {
   const params = useParams();
@@ -25,7 +106,9 @@ function AgentHubInner() {
 
   const tabParam = searchParams.get('tab');
   const initialTab =
-    tabParam === 'chat' || tabParam === 'knowledge' || tabParam === 'widget' ? tabParam : 'chat';
+    tabParam === 'chat' || tabParam === 'knowledge' || tabParam === 'settings' || tabParam === 'widget'
+      ? tabParam
+      : 'chat';
 
   const [tab, setTab] = useState(initialTab);
   const [agent, setAgent] = useState(null);
@@ -137,6 +220,14 @@ function AgentHubInner() {
             >
               Open knowledge base
             </button>
+          </section>
+        )}
+
+        {tab === 'settings' && (
+          <section className="aia-hub-section">
+            <h2 className="aia-hub-section-title">Contact &amp; fallback messages</h2>
+            <p className="aia-hub-section-desc">{TABS.find((x) => x.id === 'settings')?.desc}</p>
+            <AgentContactSettings agent={agent} onSaved={(updated) => setAgent(updated)} />
           </section>
         )}
 

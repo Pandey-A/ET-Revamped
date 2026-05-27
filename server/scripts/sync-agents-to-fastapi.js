@@ -19,6 +19,7 @@ function toIso(v) {
 }
 
 async function syncOne(agent) {
+  const extra = agent.extra && typeof agent.extra === 'object' ? agent.extra : {};
   const body = {
     id: agent.id,
     name: agent.name,
@@ -31,6 +32,9 @@ async function syncOne(agent) {
     resource_list: agent.resource_list || [],
     created_at: toIso(agent.created_at),
     public_embed: agent.public_embed !== false,
+    widget_contact_email: extra.widget_contact_email || '',
+    whatsapp_contact_email: extra.whatsapp_contact_email || '',
+    company_name: extra.company_name || '',
   };
   const r = await fetch(`${FASTAPI_BASE}/store/agents`, {
     method: 'POST',
@@ -52,7 +56,7 @@ async function main() {
   const pool = getPool();
   const { rows } = await pool.query(
     `SELECT id, name, description, greeting_message, model, temperature,
-            escalation_channel, collection_name, resource_list, public_embed, created_at
+            escalation_channel, collection_name, resource_list, public_embed, extra, created_at
      FROM ai_agents ORDER BY created_at ASC`
   );
   console.log(`Syncing ${rows.length} agent(s) to ${FASTAPI_BASE}/store/agents ...`);

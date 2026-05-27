@@ -120,8 +120,11 @@ function AgentCard({ agent, onOpen, onDelete }) {
 function CreateAgentModal({ open, onClose, onCreate }) {
   const [form, setForm] = useState({
     name: "",
+    company_name: "",
     description: "",
     greeting_message: "",
+    widget_contact_email: "",
+    whatsapp_contact_email: "",
     model: "gpt-4o-mini",
     temperature: "0.7",
     escalation_channel: "none",
@@ -139,8 +142,11 @@ function CreateAgentModal({ open, onClose, onCreate }) {
       const agentData = {
         id: agentId,
         name: form.name.trim(),
+        company_name: form.company_name.trim(),
         description: form.description.trim(),
         greeting_message: form.greeting_message.trim(),
+        widget_contact_email: form.widget_contact_email.trim(),
+        whatsapp_contact_email: form.whatsapp_contact_email.trim(),
         model: form.model,
         temperature: parseFloat(form.temperature),
         escalation_channel: form.escalation_channel,
@@ -164,8 +170,11 @@ function CreateAgentModal({ open, onClose, onCreate }) {
       onClose();
       setForm({
         name: "",
+        company_name: "",
         description: "",
         greeting_message: "",
+        widget_contact_email: "",
+        whatsapp_contact_email: "",
         model: "gpt-4o-mini",
         temperature: "0.7",
         escalation_channel: "none",
@@ -210,6 +219,38 @@ function CreateAgentModal({ open, onClose, onCreate }) {
                   onChange={handleChange}
                   required
                 />
+              </div>
+              <div className="aia-form-group">
+                <label>Company Name (shown to users)</label>
+                <input
+                  name="company_name"
+                  placeholder="e.g. ElevateTrust"
+                  value={form.company_name}
+                  onChange={handleChange}
+                />
+                <p className="aia-form-hint">Used in chat replies when the bot cannot answer from the knowledge base.</p>
+              </div>
+              <div className="aia-form-group">
+                <label>Widget contact email</label>
+                <input
+                  name="widget_contact_email"
+                  type="email"
+                  placeholder="e.g. info@elevatetrust.ai"
+                  value={form.widget_contact_email}
+                  onChange={handleChange}
+                />
+                <p className="aia-form-hint">Optional. Enables transfer + email fallback on the website widget only.</p>
+              </div>
+              <div className="aia-form-group">
+                <label>WhatsApp contact email</label>
+                <input
+                  name="whatsapp_contact_email"
+                  type="email"
+                  placeholder="e.g. support@yourcompany.com"
+                  value={form.whatsapp_contact_email}
+                  onChange={handleChange}
+                />
+                <p className="aia-form-hint">Optional. Separate escalation message for WhatsApp (can differ from widget).</p>
               </div>
               <div className="aia-form-group">
                 <label>Description / System Prompt</label>
