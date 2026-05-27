@@ -18,10 +18,10 @@ from AgentManager.ActionAgent import action_agent_handler
 from AgentManager.CoreAgent import core_agent
 from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 
-# When a question is about the company but not found in the uploaded knowledge base.
+# Company-related question but no matching content in the uploaded knowledge base.
 _COMPANY_KB_MISS_REPLY = (
-    "I don't have that information in my knowledge base. "
-    "If you have further queries, please drop a note to info@elevatetrust.ai."
+    "Sorry, I can't answer that. We will transfer your query to our agent. "
+    "Till then, you can ask your question on info@elevatetrust.ai."
 )
 
 _OUT_OF_SCOPE_TEMPLATE = (
@@ -321,7 +321,9 @@ class QueryHandler:
         if kb_context:
             return {"allow": True, "kb_context": kb_context}
 
-        if self._is_company_related_query(user_input, company_name):
+        if self._is_company_related_query(
+            user_input, company_name
+        ) or self._is_likely_business_query(user_input):
             return {"allow": False, "message": _COMPANY_KB_MISS_REPLY}
 
         return {"allow": False, "message": self._out_of_scope_reply(company_name)}
@@ -335,11 +337,58 @@ class QueryHandler:
             return t in q
         return re.search(rf"\b{re.escape(t)}\b", q) is not None
 
+    def _is_likely_business_query(self, user_input: str) -> bool:
+        """Pricing, projects, services, etc. — treat as company-related when KB has no answer."""
+        q = (user_input or "").strip().lower()
+        if not q:
+            return False
+        markers = (
+            "price",
+            "pricing",
+            "cost",
+            "quote",
+            "quotation",
+            "fee",
+            "fees",
+            "project",
+            "projects",
+            "package",
+            "packages",
+            "plan",
+            "plans",
+            "service",
+            "services",
+            "offer",
+            "offering",
+            "budget",
+            "estimate",
+            "contract",
+            "engagement",
+            "deliverable",
+            "timeline",
+            "implementation",
+            "onboarding",
+            "license",
+            "subscription",
+            "invoice",
+            "billing",
+            "rate",
+            "rates",
+            "hourly",
+            "milestone",
+            "proposal",
+            "rfp",
+            "sow",
+        )
+        return any(self._query_contains_term(q, m) for m in markers)
+
     def _is_company_related_query(self, user_input: str, company_name: str) -> bool:
         """Heuristic: likely about this business vs random trivia."""
         q = (user_input or "").strip().lower()
         if not q:
             return False
+        if self._is_likely_business_query(user_input):
+            return True
         cn = (company_name or "").strip().lower()
         if cn and cn in q:
             return True
@@ -360,10 +409,6 @@ class QueryHandler:
             "what do you do",
             "who are you",
             "tell me about you",
-            "pricing",
-            "subscription",
-            "billing",
-            "invoice",
             "upload",
             "dashboard",
             "sign up",
@@ -374,10 +419,8 @@ class QueryHandler:
             "account",
             "password",
             "documentation",
-            "knowledge base",
             "widget",
             "whatsapp",
-            "api",
             "demo",
             "contact sales",
             "support",
