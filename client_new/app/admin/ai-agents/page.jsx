@@ -345,7 +345,7 @@ export default function AIAgentsPage() {
           <span className="aia-count">
             {agents.length} agent{agents.length !== 1 ? "s" : ""}
           </span>
-          <Link href="/admin/chat-dashboard/" className="aia-btn aia-btn--secondary" style={{ marginRight: 8 }}>
+          <Link href="/chat-dashboard/" className="aia-btn aia-btn--secondary" style={{ marginRight: 8 }}>
             📊 Chat Dashboard
           </Link>
           <button className="aia-create-btn" onClick={() => setCreateOpen(true)}>

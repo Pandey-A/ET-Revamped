@@ -218,7 +218,7 @@ export default function ChatOpsDashboard() {
           )}
         </nav>
         <div className="cdb-sidebar-foot">
-          <Link href="/admin/" className="cdb-nav-item">← Admin home</Link>
+          <Link href="/" className="cdb-nav-item">← Home</Link>
         </div>
       </aside>
 
