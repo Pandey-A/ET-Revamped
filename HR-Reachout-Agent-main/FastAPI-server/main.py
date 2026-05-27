@@ -207,6 +207,30 @@ def _send_whatsapp_auto_reply(channel_config: Dict[str, Any], customer_phone: st
         logging.error(f"[WhatsApp] Auto-reply send failed: {e}")
 
 
+def _is_greeting_message(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    greeting_keywords = (
+        "hi",
+        "hello",
+        "hey",
+        "hii",
+        "hola",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    )
+    return any(t.startswith(g) for g in greeting_keywords)
+
+
+def _should_prefix_greeting(session_id: str, user_text: str) -> bool:
+    """
+    Prefix greeting whenever the user sends a greeting-like message.
+    """
+    return _is_greeting_message(user_text)
+
+
 def _get_agent_config(agent_id: str) -> Dict[str, Any]:
     if not agent_id or not os.path.exists(AGENTS_DB):
         return {}
@@ -321,7 +345,7 @@ async def async_process_whatsapp(
         if full_response:
             agent_config = _get_agent_config(agent_id)
             greeting_message = (agent_config.get("greeting_message") or "").strip()
-            if greeting_message:
+            if greeting_message and _should_prefix_greeting(session_id, text):
                 full_response = f"{greeting_message}\n\n{full_response}"
 
             chat_history_handler.add_message(session_id, "assistant", full_response)
@@ -487,9 +511,9 @@ async def capture_lead(request: Request):
         except Exception as e:
             logging.error(f"Failed to save lead: {e}")
 
-        # Send to WhatsApp
-        wa_result = whatsapp_api.send_lead_notification(lead_data)
-        lead_data["whatsapp_sent"] = wa_result.get("status") == "success"
+        # Disabled by product requirement:
+        # never send chat summaries to any WhatsApp number.
+        lead_data["whatsapp_sent"] = False
 
         # Update the saved record with whatsapp status
         try:
@@ -1317,14 +1341,9 @@ async def _complete_widget_chat(session_id: str, reason: str = "inactivity") -> 
         "summary": summary,
     }
 
-    creds = await _whatsapp_credentials_for_agent(agent_id)
-    wa = WhatsAppCloudAPI(
-        phone_number_id=creds.get("phone_number_id"),
-        access_token=creds.get("access_token"),
-        admin_phone=creds.get("admin_phone"),
-    )
-    wa_result = wa.send_lead_notification(lead_data)
-    whatsapp_sent = wa_result.get("status") == "success"
+    # Disabled by product requirement:
+    # never send chat summaries to any WhatsApp number.
+    whatsapp_sent = False
 
     record = wsm.mark_completed(session_id, reason=reason, summary=summary, whatsapp_sent=whatsapp_sent)
     if not record:

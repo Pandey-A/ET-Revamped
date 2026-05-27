@@ -132,6 +132,63 @@ class QueryHandler:
         except Exception as e:
             self.logger.error(f"[AgentConfig] Error fetching model for {agent_id}: {e}", exc_info=True)
         return None
+
+    def _get_name_from_store(self, agent_id: Optional[str]) -> str:
+        """Fetch agent/company display name from Agents_store.json for given agent_id."""
+        try:
+            with open("Agents_store.json", "r", encoding="utf-8") as f:
+                agents = json.load(f)
+            for a in agents:
+                if a.get("id") == agent_id:
+                    return (a.get("name") or "ElevateTrust").strip()
+        except Exception:
+            pass
+        return "ElevateTrust"
+
+    def _policy_instruction(self, company_name: str) -> str:
+        return (
+            "\n\nSTRICT RESPONSE POLICY:\n"
+            f"1) Always use the exact company name '{company_name}' in factual answers.\n"
+            "2) Answer ONLY from knowledge base facts. Do not guess or invent details.\n"
+            "3) If requested info is not in knowledge base, reply EXACTLY:\n"
+            "\"I dont know about that specific thing. We will transfer your conversation to a human agent.\"\n"
+            "4) Never answer out-of-scope questions with made-up information.\n"
+            "5) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
+        )
+
+    def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
+        text = (reply or "").strip()
+        if not text:
+            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+
+        lower = text.lower()
+        unknown_markers = [
+            "no existing solution found",
+            "couldn't find any information",
+            "i couldn't find",
+            "i don't have enough information",
+            "i dont have enough information",
+            "not enough information",
+            "i am not sure",
+            "i cannot find",
+        ]
+        if any(m in lower for m in unknown_markers):
+            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+
+        # Prevent stale repeated assistant responses on new turns.
+        last_assistant = None
+        for msg in reversed(chat_history or []):
+            role = str(getattr(msg, "role", "")).lower()
+            if "assistant" in role:
+                last_assistant = (getattr(msg, "content", "") or "").strip()
+                break
+        if last_assistant and last_assistant == text:
+            return "I dont know about that specific thing. We will transfer your conversation to a human agent."
+
+        if company_name and company_name.lower() not in lower:
+            # Prefix company name context if missing.
+            text = f"{company_name}: {text}"
+        return text
     # === ADD: end helper methods ===
 
     @staticmethod
@@ -201,6 +258,8 @@ class QueryHandler:
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
+            company_name = self._get_name_from_store(agent_id)
+            content += self._policy_instruction(company_name)
             
             # For website widget / anonymous sessions, inject lead-gen behavior
             if (
@@ -268,6 +327,7 @@ class QueryHandler:
                     "I don't have enough information in my knowledge base to answer that yet. "
                     "Please try asking in a different way."
                 )
+            reply = self._enforce_reply_policy(reply, company_name, chat_history)
             return self._non_streaming_async_gen(reply)
 
         except Exception as e:
@@ -310,6 +370,8 @@ class QueryHandler:
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
             model_id = self._get_model_from_store(agent_id)
+            company_name = self._get_name_from_store(agent_id)
+            content += self._policy_instruction(company_name)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
             # For website widget / anonymous sessions, inject lead-gen behavior
@@ -358,8 +420,11 @@ class QueryHandler:
             
             chat_history += [ChatMessage(role="system", content=content)]
             chat_response = agent.chat(user_input, chat_history)
+            reply = self._enforce_reply_policy(
+                self._extract_chat_text(chat_response), company_name, chat_history
+            )
             return self._non_streaming_sync_gen(
-                self._extract_chat_text(chat_response)
+                reply
             )
 
         except Exception as e:
