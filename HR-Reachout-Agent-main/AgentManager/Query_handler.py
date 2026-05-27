@@ -18,6 +18,12 @@ from AgentManager.ActionAgent import action_agent_handler
 from AgentManager.CoreAgent import core_agent
 from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 
+# When a question is about the company but not found in the uploaded knowledge base.
+_COMPANY_KB_MISS_REPLY = (
+    "I don't have that information in my knowledge base. "
+    "If you have further queries, please drop a note to info@elevatetrust.ai."
+)
+
 
 class QueryHandler:
     def __init__(self):
@@ -156,7 +162,7 @@ class QueryHandler:
             "3) If question is out of scope (not about company/KB), reply EXACTLY:\n"
             f"\"sorry i cant answer that specific question but you can ask me about the {company_name}.\"\n"
             "4) If question is about company but KB has no relevant info, reply EXACTLY:\n"
-            "\"transferring to Human agent\"\n"
+            f"\"{_COMPANY_KB_MISS_REPLY}\"\n"
             "5) Never answer out-of-scope questions with made-up information.\n"
             "6) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
@@ -248,9 +254,9 @@ class QueryHandler:
     ) -> str:
         sol = rag_result.get("solution", "")
         if isinstance(sol, str) and "error occurred during retrieval" in sol.lower():
-            return "transferring to Human agent"
+            return _COMPANY_KB_MISS_REPLY
         if self._is_company_related_query(user_input, company_name):
-            return "transferring to Human agent"
+            return _COMPANY_KB_MISS_REPLY
         return f"sorry i cant answer that specific question but you can ask me about the {company_name}."
 
     def _run_rag_preflight(self, user_input: str, collection_name: str) -> Dict[str, Any]:
@@ -262,7 +268,7 @@ class QueryHandler:
     def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
         text = (reply or "").strip()
         if not text:
-            return "transferring to Human agent"
+            return _COMPANY_KB_MISS_REPLY
 
         lower = text.lower()
         unknown_markers = [
@@ -276,7 +282,7 @@ class QueryHandler:
             "i cannot find",
         ]
         if any(m in lower for m in unknown_markers):
-            return "transferring to Human agent"
+            return _COMPANY_KB_MISS_REPLY
 
         # Prevent stale repeated assistant responses on new turns.
         last_assistant = None
@@ -286,7 +292,7 @@ class QueryHandler:
                 last_assistant = (getattr(msg, "content", "") or "").strip()
                 break
         if last_assistant and last_assistant == text:
-            return "transferring to Human agent"
+            return _COMPANY_KB_MISS_REPLY
         return text
     # === ADD: end helper methods ===
 
@@ -433,10 +439,7 @@ class QueryHandler:
                 )
             reply = self._extract_chat_text(chat_response).strip()
             if not reply:
-                reply = (
-                    "I don't have enough information in my knowledge base to answer that yet. "
-                    "Please try asking in a different way."
-                )
+                reply = _COMPANY_KB_MISS_REPLY
             reply = self._enforce_reply_policy(reply, company_name, chat_history)
             return self._non_streaming_async_gen(reply)
 
