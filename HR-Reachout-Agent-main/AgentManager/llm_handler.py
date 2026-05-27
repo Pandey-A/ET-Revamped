@@ -33,9 +33,28 @@ with open(config_path) as config_file:
 _bedrock_cfg = config["Bedrock"]
 
 
-def _is_llama3_model(model_id: str) -> bool:
+def _use_llama3_prompt_format(model_id: str) -> bool:
+    """Meta Llama 3 on Bedrock needs instruct tokens, not Llama 2 [INST] format."""
     name = (model_id or "").lower()
-    return "llama3" in name or "llama-3" in name
+    return (
+        "llama3" in name
+        or "llama-3" in name
+        or name.startswith("meta.llama")
+    )
+
+
+def _resolve_bedrock_model(model_id: str) -> str:
+    """
+    Ensure we call Bedrock with a Bedrock-style model id.
+    Dashboard agents may still carry OpenAI names (e.g. gpt-4o-mini).
+    """
+    candidate = (model_id or "").strip()
+    if not candidate:
+        return _bedrock_cfg["model_id"]
+    # Bedrock model ids normally include a provider prefix (meta./anthropic./amazon./openai./...)
+    if "." not in candidate:
+        return _bedrock_cfg["model_id"]
+    return candidate
 
 
 class LLMHandler:
@@ -48,14 +67,14 @@ class LLMHandler:
         Credentials are resolved automatically from the EC2 IAM role
         via the default boto3 credential chain — no API keys required.
         """
-        model_id = model or _bedrock_cfg["model_id"]
+        model_id = _resolve_bedrock_model(model or _bedrock_cfg["model_id"])
         bedrock_kwargs = {
             "model": model_id,
             "temperature": temperature or _bedrock_cfg.get("temperature", 0.7),
             "region_name": _bedrock_cfg.get("region", "ap-south-1"),
             "context_size": 128000,
         }
-        if _is_llama3_model(model_id):
+        if _use_llama3_prompt_format(model_id):
             bedrock_kwargs["messages_to_prompt"] = messages_to_llama3_prompt
             bedrock_kwargs["completion_to_prompt"] = completion_to_llama3_prompt
         return Bedrock(**bedrock_kwargs)

@@ -112,6 +112,26 @@ class QueryHandler:
         except Exception as e:
             self.logger.error(f"[AgentConfig] Error fetching description for {agent_id}: {e}", exc_info=True)
             return "You are a helpful assistant."
+
+    def _get_model_from_store(self, agent_id: Optional[str]) -> Optional[str]:
+        """Fetch Bedrock model_id from Agents_store.json for given agent_id."""
+        if not agent_id:
+            return None
+        try:
+            with open("Agents_store.json", "r", encoding="utf-8") as f:
+                agents = json.load(f)
+            for a in agents:
+                if a.get("id") == agent_id:
+                    model = a.get("model")
+                    if model:
+                        self.logger.info(f"[AgentConfig] model for agent_id={agent_id} -> {model}")
+                        return model
+            self.logger.warning(
+                f"[AgentConfig] agent_id {agent_id} not found in Agents_store.json for model lookup."
+            )
+        except Exception as e:
+            self.logger.error(f"[AgentConfig] Error fetching model for {agent_id}: {e}", exc_info=True)
+        return None
     # === ADD: end helper methods ===
 
     @staticmethod
@@ -130,6 +150,31 @@ class QueryHandler:
         if text:
             yield text
 
+    def _sanitize_chat_history(self, history: List[ChatMessage]) -> List[ChatMessage]:
+        """
+        Keep only user/assistant turns and collapse consecutive same-role entries.
+        This avoids Bedrock Llama prompt formatter assertions on malformed histories.
+        """
+        cleaned: List[ChatMessage] = []
+        for msg in history or []:
+            role = str(getattr(msg, "role", "")).lower()
+            content = getattr(msg, "content", "")
+            if not content:
+                continue
+            if "user" in role:
+                normalized_role = "user"
+            elif "assistant" in role:
+                normalized_role = "assistant"
+            else:
+                continue
+
+            if cleaned and str(cleaned[-1].role).lower() == normalized_role:
+                merged = (cleaned[-1].content or "") + "\n" + str(content)
+                cleaned[-1] = ChatMessage(role=normalized_role, content=merged)
+            else:
+                cleaned.append(ChatMessage(role=normalized_role, content=str(content)))
+        return cleaned
+
     async def aprocess_query(self,
                       user_input: str,
                       session_id: str,
@@ -141,6 +186,7 @@ class QueryHandler:
                 session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             chat_history = chat_history_handler.get_chat_history(session_id)
+            chat_history = self._sanitize_chat_history(chat_history)
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
@@ -154,6 +200,7 @@ class QueryHandler:
             
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
+            model_id = self._get_model_from_store(agent_id)
             
             # For website widget / anonymous sessions, inject lead-gen behavior
             if (
@@ -162,7 +209,6 @@ class QueryHandler:
                 or session_id.startswith("widget_")
                 or session_id.startswith("w_")
             ):
-                is_start = len(chat_history) <= 2
                 is_whatsapp = session_id.startswith("whatsapp_")
                 
                 lead_gen_instruction = (
@@ -193,18 +239,36 @@ class QueryHandler:
                 content += lead_gen_instruction
             
             agent = core_agent.create_core_agent(
-                monitoring_result.get("sentiment_analysis", {}), collection_name=collection_name
+                monitoring_result.get("sentiment_analysis", {}),
+                collection_name=collection_name,
+                model_id=model_id,
             )
             
             chat_history += [ChatMessage(role="system", content=content)]
 
             def run_chat():
-                return agent.chat(user_input, chat_history)
+                try:
+                    return agent.chat(user_input, chat_history)
+                except ValueError as exc:
+                    if "max iterations" in str(exc).lower():
+                        self.logger.warning(
+                            "ReAct agent hit max iterations for session %s", session_id
+                        )
+                        return None
+                    raise
 
             chat_response = await asyncio.to_thread(run_chat)
-            return self._non_streaming_async_gen(
-                self._extract_chat_text(chat_response)
-            )
+            if chat_response is None:
+                return self._non_streaming_async_gen(
+                    "I'm having trouble completing that request. Please try rephrasing your question."
+                )
+            reply = self._extract_chat_text(chat_response).strip()
+            if not reply:
+                reply = (
+                    "I don't have enough information in my knowledge base to answer that yet. "
+                    "Please try asking in a different way."
+                )
+            return self._non_streaming_async_gen(reply)
 
         except Exception as e:
             error_msg = f"Error processing query: {str(e)}"
@@ -232,6 +296,7 @@ class QueryHandler:
                 self.logger.info(f"Generated new session_id: {session_id}")
             
             chat_history = chat_history_handler.get_chat_history(session_id)
+            chat_history = self._sanitize_chat_history(chat_history)
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
@@ -244,6 +309,7 @@ class QueryHandler:
             print(f"Monitoring result: {monitoring_result}")
             collection_name = self._get_collection_from_store(agent_id)
             content = self._get_description_from_store(agent_id)
+            model_id = self._get_model_from_store(agent_id)
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
             # For website widget / anonymous sessions, inject lead-gen behavior
@@ -284,7 +350,9 @@ class QueryHandler:
                 content += lead_gen_instruction
                 
             agent = core_agent.create_core_agent(
-                monitoring_result.get("sentiment_analysis", {}), collection_name=collection_name
+                monitoring_result.get("sentiment_analysis", {}),
+                collection_name=collection_name,
+                model_id=model_id,
             )
             print(f"printing chat history: {chat_history}")
             
