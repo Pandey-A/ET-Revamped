@@ -21,7 +21,7 @@ from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 # Company-related question but no matching content in the uploaded knowledge base.
 _COMPANY_KB_MISS_REPLY = (
     "Sorry, I can't answer that. We will transfer your query to our agent. "
-    "Till then, you can ask your question on info@elevatetrust.ai."
+    "Till then, you can ask your other questions here or contact us on info@elevatetrust.ai."
 )
 
 _OUT_OF_SCOPE_TEMPLATE = (
