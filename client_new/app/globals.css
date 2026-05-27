@@ -836,6 +836,19 @@
 .aia-form-group input:focus,
 .aia-form-group textarea:focus,
 .aia-form-group select:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+.aia-form-hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 42rem;
+}
+.aia-form-hint code {
+  font-size: 0.72rem;
+  background: #f1f5f9;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
 .aia-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
 /* ============================================================

@@ -18,6 +18,7 @@ from typing import List, Optional, Any, Dict
 from fastapi import UploadFile, File, Form, APIRouter
 from fastapi.staticfiles import StaticFiles
 import os
+import re
 import requests
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -102,6 +103,110 @@ def _parse_object_id(id_str: str) -> ObjectId:
     return ObjectId(id_str)
 
 
+def _normalize_whatsapp_business_account_id(val: Any) -> str:
+    """Digits-only WABA id (Meta); tolerates spaces/dashes in pasted UI values."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    digits = re.sub(r"\D", "", s)
+    return digits if len(digits) >= 8 else s
+
+
+def _normalize_whatsapp_phone_number_id(val: Any) -> str:
+    """Digits-only phone number id from Meta; tolerates pasted labels/spaces."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    digits = re.sub(r"\D", "", s)
+    return digits if len(digits) >= 8 else s
+
+
+async def _resolve_whatsapp_channel(waba_id: Any, phone_number_id: Any) -> Optional[Dict[str, Any]]:
+    """
+    Find Mongo channel row for this inbound webhook.
+    Tries normalized ids, then raw stripped strings, then phone_number_id only (wrong WABA in UI).
+    """
+    if mongo_db is None:
+        return None
+
+    w_norm = _normalize_whatsapp_business_account_id(waba_id)
+    p_norm = _normalize_whatsapp_phone_number_id(phone_number_id)
+    w_raw = str(waba_id).strip() if waba_id is not None else ""
+    p_raw = str(phone_number_id).strip() if phone_number_id is not None else ""
+
+    if not p_norm and not p_raw:
+        return None
+
+    coll = mongo_db[WHATSAPP_CHANNELS_COLLECTION]
+
+    if w_norm and p_norm:
+        doc = await coll.find_one(
+            {"whatsapp_business_account_id": w_norm, "phone_number_id": p_norm}
+        )
+        if doc:
+            return doc
+
+    if w_raw and p_raw:
+        doc = await coll.find_one(
+            {"whatsapp_business_account_id": w_raw, "phone_number_id": p_raw}
+        )
+        if doc:
+            return doc
+
+    # Legacy rows: phone_number_id pasted with spaces
+    if w_norm and p_norm:
+        ws_rx = re.compile(r"^\s*" + re.escape(p_norm) + r"\s*$")
+        doc = await coll.find_one(
+            {
+                "whatsapp_business_account_id": w_norm,
+                "phone_number_id": {"$regex": ws_rx},
+            }
+        )
+        if doc:
+            return doc
+
+    # Wrong WABA pasted in dashboard is common; phone_number_id is unique per number.
+    if p_norm:
+        matches = await coll.find({"phone_number_id": p_norm}).to_list(length=5)
+        if len(matches) == 1:
+            logging.warning(
+                "[WhatsApp] Matched channel by phone_number_id only (check WABA id in dashboard). "
+                f"webhook_waba={waba_id!r} stored_waba={matches[0].get('whatsapp_business_account_id')!r}"
+            )
+            return matches[0]
+        if len(matches) > 1:
+            logging.error(
+                f"[WhatsApp] Multiple channels share phone_number_id={p_norm}; cannot disambiguate."
+            )
+
+    if p_raw and p_raw != p_norm:
+        matches = await coll.find({"phone_number_id": p_raw}).to_list(length=5)
+        if len(matches) == 1:
+            logging.warning(
+                "[WhatsApp] Matched channel by raw phone_number_id only. "
+                f"webhook_waba={waba_id!r} stored_waba={matches[0].get('whatsapp_business_account_id')!r}"
+            )
+            return matches[0]
+
+    return None
+
+
+def _send_whatsapp_auto_reply(channel_config: Dict[str, Any], customer_phone: str, text_body: str) -> None:
+    """Sync helper for BackgroundTasks (non-text hints, etc.)."""
+    try:
+        from AgentManager.whatsapp_handler import WhatsAppCloudAPI
+
+        api = WhatsAppCloudAPI(
+            phone_number_id=channel_config.get("phone_number_id"),
+            access_token=channel_config.get("access_token"),
+            admin_phone=channel_config.get("admin_phone"),
+        )
+        to = "+" + str(customer_phone).replace("+", "").replace(" ", "")
+        api.send_whatsapp_message(to, text_body)
+    except Exception as e:
+        logging.error(f"[WhatsApp] Auto-reply send failed: {e}")
+
+
 def _get_agent_config(agent_id: str) -> Dict[str, Any]:
     if not agent_id or not os.path.exists(AGENTS_DB):
         return {}
@@ -182,10 +287,7 @@ async def async_process_whatsapp(
         )
         chat_history_handler.add_message(session_id, "user", text)
 
-        channel_config = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
-            "whatsapp_business_account_id": str(waba_id),
-            "phone_number_id": str(phone_number_id),
-        })
+        channel_config = await _resolve_whatsapp_channel(waba_id, phone_number_id)
         if not channel_config:
             logging.warning(
                 f"[WhatsApp] No channel mapping found for WABA={waba_id}, phone_number_id={phone_number_id}"
@@ -209,6 +311,12 @@ async def async_process_whatsapp(
         async for chunk in response_gen:
             if chunk:
                 full_response += chunk
+
+        if not full_response.strip():
+            full_response = (
+                "Sorry, I couldn't generate a reply just now. Please try again in a moment, "
+                "or rephrase your question."
+            )
 
         if full_response:
             agent_config = _get_agent_config(agent_id)
@@ -267,10 +375,7 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                         f"Bot display number: {display_phone_number}"
                     )
 
-                    channel_config = await mongo_db[WHATSAPP_CHANNELS_COLLECTION].find_one({
-                        "whatsapp_business_account_id": str(waba_id),
-                        "phone_number_id": str(phone_number_id),
-                    })
+                    channel_config = await _resolve_whatsapp_channel(waba_id, phone_number_id)
                     if not channel_config:
                         logging.warning(
                             f"[WhatsApp Webhook] No mapping for WABA={waba_id}, phone_number_id={phone_number_id}"
@@ -279,8 +384,10 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
 
                     if "messages" in value:
                         for msg in value["messages"]:
+                            phone = msg.get("from")
+                            if not phone:
+                                continue
                             if msg.get("type") == "text":
-                                phone = msg.get("from")
                                 text = msg["text"]["body"]
                                 # Include WABA ID and bot phone_number_id in the session
                                 # so different bots/accounts produce distinct sessions.
@@ -294,6 +401,21 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                                     waba_id,
                                     phone_number_id,
                                     display_phone_number,
+                                )
+                            else:
+                                msg_type = msg.get("type") or "unknown"
+                                hint = (
+                                    "Thanks for your message. I can only read text messages right now. "
+                                    "Please type your question as a plain text message."
+                                )
+                                background_tasks.add_task(
+                                    _send_whatsapp_auto_reply,
+                                    dict(channel_config),
+                                    phone,
+                                    hint,
+                                )
+                                logging.info(
+                                    f"[WhatsApp Webhook] Non-text inbound type={msg_type} from={phone}; queued hint reply."
                                 )
 
         return {"status": "success"}
@@ -630,9 +752,11 @@ async def create_whatsapp_channel(payload: WhatsAppChannelCreate):
     if mongo_db is None:
         raise HTTPException(status_code=500, detail="MongoDB is not configured")
     now = datetime.utcnow().isoformat()
+    waba = _normalize_whatsapp_business_account_id(payload.whatsapp_business_account_id)
+    phone_id = _normalize_whatsapp_phone_number_id(payload.phone_number_id)
     doc = {
-        "whatsapp_business_account_id": payload.whatsapp_business_account_id.strip(),
-        "phone_number_id": payload.phone_number_id.strip(),
+        "whatsapp_business_account_id": waba,
+        "phone_number_id": phone_id,
         "display_phone_number": (payload.display_phone_number or "").strip(),
         "access_token": payload.access_token.strip(),
         "ai_agent_id": payload.ai_agent_id.strip(),
@@ -678,6 +802,14 @@ async def update_whatsapp_channel(id: str, payload: WhatsAppChannelUpdate):
             cleaned_updates[key] = value.strip()
         else:
             cleaned_updates[key] = value
+    if "whatsapp_business_account_id" in cleaned_updates:
+        cleaned_updates["whatsapp_business_account_id"] = _normalize_whatsapp_business_account_id(
+            cleaned_updates["whatsapp_business_account_id"]
+        )
+    if "phone_number_id" in cleaned_updates:
+        cleaned_updates["phone_number_id"] = _normalize_whatsapp_phone_number_id(
+            cleaned_updates["phone_number_id"]
+        )
     cleaned_updates["updated_at"] = datetime.utcnow().isoformat()
 
     if "whatsapp_business_account_id" in cleaned_updates or "phone_number_id" in cleaned_updates:

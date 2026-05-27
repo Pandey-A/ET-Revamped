@@ -179,11 +179,19 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
                   onChange={handleChange}
                   required
                 />
+                <small className="aia-form-hint">
+                  Meta → WhatsApp → API setup: use the <strong>WhatsApp Business Account ID</strong> (digits only).
+                  Must match the <code>entry.id</code> in webhooks for this app.
+                </small>
               </div>
 
               <div className="aia-form-group">
                 <label>Phone Number ID *</label>
                 <input name="phone_number_id" value={form.phone_number_id} onChange={handleChange} required />
+                <small className="aia-form-hint">
+                  Same screen: <strong>Phone number ID</strong> for the business number (not the display phone number).
+                  If the bot is silent, this ID is usually wrong — the server matches on this + WABA.
+                </small>
               </div>
 
               <div className="aia-form-group">
