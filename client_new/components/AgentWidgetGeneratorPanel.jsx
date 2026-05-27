@@ -18,7 +18,7 @@ const defaultStarters = `What can you help me with?\nHow does pricing work?\nI n
 
 const GEN_MIN_MS = 720;
 
-const WIDGET_LIVE_ORIGIN = 'https://elevatetrust.in';
+const WIDGET_LIVE_ORIGIN = 'http://13.200.189.83';
 
 const backendExample = `// Hosted gateway: app/api/widget/chat/route.js
 // POST JSON { agentId, message, sessionId? } → { reply }`;

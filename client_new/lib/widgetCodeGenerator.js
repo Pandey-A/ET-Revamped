@@ -24,6 +24,10 @@ export function parseStarterQuestions(raw) {
 }
 
 export function normalizeConfig(form) {
+  const envOrigin =
+    (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_APP_ORIGIN || '').replace(/\/$/, '')) || '';
+  const browserOrigin =
+    (typeof window !== 'undefined' && window.location?.origin ? window.location.origin.replace(/\/$/, '') : '') || '';
   return {
     chatbotName: form.chatbotName?.trim() || 'Assistant',
     logoUrl: form.logoUrl?.trim() || '',
@@ -36,8 +40,9 @@ export function normalizeConfig(form) {
     position: form.position === 'bottom-left' ? 'bottom-left' : 'bottom-right',
     apiBaseUrl:
       (form.apiBaseUrl || '').replace(/\/$/, '') ||
-      (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_APP_ORIGIN || '').replace(/\/$/, '')) ||
-      'https://elevatetrust.in',
+      envOrigin ||
+      browserOrigin ||
+      'http://13.200.189.83',
   };
 }
 

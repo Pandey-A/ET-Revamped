@@ -23,12 +23,21 @@
     return;
   }
 
+  var scriptOrigin = '';
+  try {
+    scriptOrigin = new URL(sc.src).origin;
+  } catch (e) {
+    scriptOrigin = '';
+  }
+
   var apiBase = (sc.getAttribute('data-api-base') || '').trim();
   if (!apiBase) {
-    try {
-      apiBase = new URL(sc.src).origin;
-    } catch (e) {
-      console.error('[ET Widget] Invalid script src');
+    if (scriptOrigin) {
+      apiBase = scriptOrigin;
+    } else if (window && window.location && window.location.origin) {
+      apiBase = window.location.origin;
+    } else {
+      console.error('[ET Widget] Missing data-api-base and invalid script src');
       return;
     }
   }
@@ -81,12 +90,23 @@
     inactivityTimer = setTimeout(completeChat, inactivityMs);
   }
 
-  function apiPost(path, body) {
-    return fetch(apiBase + path, {
+  function fetchJson(base, path, body) {
+    return fetch(base + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); });
+  }
+
+  function apiPost(path, body) {
+    return fetchJson(apiBase, path, body).catch(function (err) {
+      var fallback = (window && window.location && window.location.origin) ? window.location.origin : scriptOrigin;
+      if (!fallback) throw err;
+      fallback = fallback.replace(/\/$/, '');
+      if (fallback === apiBase) throw err;
+      console.warn('[ET Widget] Primary API base failed, retrying with page origin:', fallback);
+      return fetchJson(fallback, path, body);
+    });
   }
 
   function startSession() {
