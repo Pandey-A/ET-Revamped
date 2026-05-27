@@ -53,6 +53,10 @@
   var inactivityMs = parseInt(sc.getAttribute('data-inactivity-ms') || '90000', 10);
   if (inactivityMs < 60000) inactivityMs = 90000;
   if (inactivityMs > 120000) inactivityMs = 120000;
+  var leadAfterMsgs = parseInt(sc.getAttribute('data-lead-after-msgs') || '2', 10);
+  if (leadAfterMsgs < 1) leadAfterMsgs = 2;
+  var leadAfterMs = parseInt(sc.getAttribute('data-lead-after-ms') || '90000', 10);
+  if (leadAfterMs < 30000) leadAfterMs = 90000;
 
   var starters = startersRaw
     ? startersRaw.split('|').map(function (s) { return s.trim(); }).filter(Boolean)
@@ -83,6 +87,8 @@
   var inactivityTimer = null;
   var contact = { name: '', email: '', phone: '' };
   var showContactForm = false;
+  var leadAsked = false;
+  var leadTimerId = null;
 
   function resetInactivityTimer() {
     if (chatCompleted) return;
@@ -157,6 +163,29 @@
     if (contact.name || contact.email || contact.phone) saveContact();
   }
 
+  function hasFullContact() {
+    return !!(contact.name && contact.email && contact.phone);
+  }
+
+  function promptForLeadDetails() {
+    if (leadAsked || chatCompleted || hasFullContact()) return;
+    leadAsked = true;
+    showContactForm = true;
+    addBubble(
+      'If you are interested in learning more about our services, please share your name, email, and phone number so we can connect with you.',
+      'assistant'
+    );
+    contactForm.style.display = 'block';
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function scheduleLeadPromptByTime() {
+    if (leadTimerId || leadAsked || chatCompleted) return;
+    leadTimerId = setTimeout(function () {
+      promptForLeadDetails();
+    }, leadAfterMs);
+  }
+
   var corner = position === 'bottom-left' ? 'left:16px;' : 'right:16px;';
   var z = 2147483000;
 
@@ -218,7 +247,8 @@
   var contactForm = document.createElement('div');
   contactForm.style.cssText = 'display:none;padding:10px;background:#f1f8f1;border-radius:12px;margin-top:8px;';
   contactForm.innerHTML =
-    '<div style="font-weight:600;font-size:12px;margin-bottom:8px;color:#1B5E20">Share your details (optional)</div>';
+    '<div data-et-lead-title style="font-weight:600;font-size:12px;margin-bottom:8px;color:#1B5E20">Your details so we can connect</div>' +
+    '<div style="font-size:11px;color:#525252;margin-bottom:8px;line-height:1.4">Interested in our services? Leave your name, email, and phone.</div>';
   ['name', 'email', 'phone'].forEach(function (field) {
     var inpF = document.createElement('input');
     inpF.type = field === 'email' ? 'email' : field === 'phone' ? 'tel' : 'text';
@@ -238,7 +268,8 @@
   contactSubmit.onclick = function () {
     saveContact();
     contactForm.style.display = 'none';
-    addBubble('Thanks! We have your details. Any other questions before we wrap up?', 'assistant');
+    showContactForm = false;
+    addBubble('Thank you! We have your details and will connect with you soon. Feel free to ask anything else.', 'assistant');
   };
   contactForm.appendChild(contactSubmit);
 
@@ -318,11 +349,6 @@
     tryParseContact(text);
     resetInactivityTimer();
 
-    if (userMsgCount === 3 && !showContactForm) {
-      showContactForm = true;
-      contactForm.style.display = 'block';
-    }
-
     setLoading(true);
     var think = document.createElement('div');
     think.id = 'et-widget-thinking';
@@ -347,6 +373,9 @@
         }
         addBubble(reply, 'assistant');
         resetInactivityTimer();
+        if (userMsgCount >= leadAfterMsgs && !leadAsked && !hasFullContact()) {
+          setTimeout(promptForLeadDetails, 2500);
+        }
         var low = reply.toLowerCase();
         if (low.indexOf('mark this chat') >= 0 || low.indexOf('chat is complete') >= 0 || low.indexOf('chat complete') >= 0) {
           setTimeout(function () { completeChat('agent_closed'); }, 3000);
@@ -379,6 +408,7 @@
       renderEmpty();
       startSession();
       resetInactivityTimer();
+      scheduleLeadPromptByTime();
     }
     inp.focus();
   };

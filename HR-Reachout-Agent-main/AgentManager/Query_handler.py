@@ -250,11 +250,33 @@ class QueryHandler:
             "6) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
 
-    def _agent_has_widget_escalation(self, agent_id: Optional[str]) -> bool:
-        return bool(self._contact_email_for_channel(self._get_agent_record(agent_id), "widget"))
-
     def _agent_has_whatsapp_escalation(self, agent_id: Optional[str]) -> bool:
         return bool(self._contact_email_for_channel(self._get_agent_record(agent_id), "whatsapp"))
+
+    @staticmethod
+    def _is_widget_channel_session(session_id: str) -> bool:
+        sid = session_id or ""
+        return (
+            sid.startswith("widget_")
+            or sid.startswith("anon_")
+            or sid.startswith("w_")
+        )
+
+    def _widget_lead_gen_instruction(self, company_name: str) -> str:
+        """Website widget only — capture name, email, phone after the user has chatted a bit."""
+        cn = company_name or "our services"
+        return (
+            "\n\nWIDGET-ONLY LEAD CAPTURE (embedded website chat — never use on WhatsApp):\n"
+            "1) Answer the user's questions from the knowledge base first.\n"
+            "2) After at least 2–3 back-and-forth messages, or when they seem engaged, ask ONCE if they "
+            "want to hear more.\n"
+            "3) Use this style (adapt naturally): \"If you are interested in learning more about "
+            f"{cn}, please share your name, email, and phone number so we can connect with you.\"\n"
+            "4) You may ask for name, then email, then phone — one at a time if they reply in chat.\n"
+            "5) NEVER ask for contact details in the first reply or while they still have open product questions.\n"
+            "6) NEVER repeat the same contact request in this session.\n"
+            "7) Keep replies concise (under 60 words).\n"
+        )
 
     def _is_brief_social_message(self, user_input: str) -> bool:
         """Short greetings/thanks — skip strict KB preflight so UX stays natural."""
@@ -644,41 +666,17 @@ class QueryHandler:
                 )
             
             is_whatsapp = session_id.startswith("whatsapp_")
-            is_widget_channel = (
-                session_id.startswith("anon_")
-                or session_id.startswith("widget_")
-                or session_id.startswith("w_")
-            )
-            inject_widget_lead = is_widget_channel and self._agent_has_widget_escalation(agent_id)
+            inject_widget_lead = self._is_widget_channel_session(session_id)
             inject_whatsapp_lead = is_whatsapp and self._agent_has_whatsapp_escalation(agent_id)
 
-            if inject_widget_lead or inject_whatsapp_lead:
-                lead_gen_instruction = (
-                    "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
-                    "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
-                    "\nHere are your strict rules:"
-                    "\n1. First and foremost, answer the user's questions clearly using your knowledge base."
-                    "\n2. When the user asks how to use the platform or what it does, guide them to SIGN UP and go to the FUNCTIONALITY/UPLOAD page."
-                    "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
-                    "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
+            if inject_widget_lead:
+                content += self._widget_lead_gen_instruction(company_name)
+            elif inject_whatsapp_lead:
+                content += (
+                    "\n\nWHATSAPP LEAD CAPTURE:\n"
+                    "After the user seems satisfied, you may ask once for name and email if they want a follow-up. "
+                    "Do not ask at the start of the conversation.\n"
                 )
-                if inject_whatsapp_lead:
-                    lead_gen_instruction += (
-                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
-                    )
-                elif inject_widget_lead:
-                    lead_gen_instruction += (
-                        "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
-                        "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
-                        "\n7. If they say no more questions, thank them warmly and confirm the chat is complete."
-                    )
-                lead_gen_instruction += (
-                    "\n8. NEVER ask for contact details at the very beginning or while they still have product questions."
-                    "\n9. NEVER repeat a question you have already asked."
-                    "\n10. Keep responses concise (under 60 words) and conversational."
-                )
-                
-                content += lead_gen_instruction
             
             agent = core_agent.create_core_agent(
                 monitoring_result.get("sentiment_analysis", {}),
@@ -783,41 +781,17 @@ class QueryHandler:
             print(f"[ProcessQuery] Using collection='{collection_name}' for agent_id={agent_id}")
             
             is_whatsapp = session_id.startswith("whatsapp_")
-            is_widget_channel = (
-                session_id.startswith("anon_")
-                or session_id.startswith("widget_")
-                or session_id.startswith("w_")
-            )
-            inject_widget_lead = is_widget_channel and self._agent_has_widget_escalation(agent_id)
+            inject_widget_lead = self._is_widget_channel_session(session_id)
             inject_whatsapp_lead = is_whatsapp and self._agent_has_whatsapp_escalation(agent_id)
 
-            if inject_widget_lead or inject_whatsapp_lead:
-                lead_gen_instruction = (
-                    "\n\nIMPORTANT ADDITIONAL BEHAVIOR — User Guide & Lead Generation:"
-                    "\nYou are the ElevateTrust AI assistant. Your goal is to guide users to use our platform and smartly capture their contact details."
-                    "\nHere are your strict rules:"
-                    "\n1. First and foremost, answer the user's questions clearly using your knowledge base."
-                    "\n2. When the user asks how to use the platform or what it does, guide them to SIGN UP and go to the FUNCTIONALITY/UPLOAD page."
-                    "\n3. Explain that they can upload videos or paste URLs to detect deepfakes."
-                    "\n4. CRITICAL: ONLY when the user appears satisfied, says 'thanks', 'okay', or seems to have finished their questions, YOU MUST naturally ask for their name, email, and phone number (if you don't already have them)."
+            if inject_widget_lead:
+                content += self._widget_lead_gen_instruction(company_name)
+            elif inject_whatsapp_lead:
+                content += (
+                    "\n\nWHATSAPP LEAD CAPTURE:\n"
+                    "After the user seems satisfied, you may ask once for name and email if they want a follow-up. "
+                    "Do not ask at the start of the conversation.\n"
                 )
-                if inject_whatsapp_lead:
-                    lead_gen_instruction += (
-                        "\n5. Say something like: 'I am glad I could help! If you'd like our team to follow up or give you a personalized demo, could you share your name and email?'"
-                    )
-                elif inject_widget_lead:
-                    lead_gen_instruction += (
-                        "\n5. When they seem done with questions, ask ONE question at a time for: full name, phone number, and email address."
-                        "\n6. After collecting contact info (or if they decline), ask: 'Do you have any other questions, or can we mark this chat as complete?'"
-                        "\n7. If they say no more questions, thank them warmly and confirm the chat is complete."
-                    )
-                lead_gen_instruction += (
-                    "\n8. NEVER ask for contact details at the very beginning or while they still have product questions."
-                    "\n9. NEVER repeat a question you have already asked."
-                    "\n10. Keep responses concise (under 60 words) and conversational."
-                )
-                
-                content += lead_gen_instruction
                 
             agent = core_agent.create_core_agent(
                 monitoring_result.get("sentiment_analysis", {}),
