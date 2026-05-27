@@ -148,13 +148,35 @@ class QueryHandler:
     def _policy_instruction(self, company_name: str) -> str:
         return (
             "\n\nSTRICT RESPONSE POLICY:\n"
-            f"1) Always use the exact company name '{company_name}' in factual answers.\n"
+            "1) Respond naturally in chat style. Do NOT prefix replies with agent/company labels.\n"
             "2) Answer ONLY from knowledge base facts. Do not guess or invent details.\n"
             "3) If requested info is not in knowledge base, reply EXACTLY:\n"
             "\"I dont know about that specific thing. We will transfer your conversation to a human agent.\"\n"
             "4) Never answer out-of-scope questions with made-up information.\n"
             "5) Keep responses concise and avoid repeating the same sentence repeatedly.\n"
         )
+
+    def _is_out_of_scope_query(self, user_input: str) -> bool:
+        q = (user_input or "").strip().lower()
+        if not q:
+            return False
+        out_scope_markers = [
+            "temperature",
+            "weather",
+            "forecast",
+            "rain",
+            "humidity",
+            "stock price",
+            "bitcoin",
+            "crypto",
+            "match score",
+            "sports score",
+            "news today",
+            "movie recommendation",
+            "tell me a joke",
+            "horoscope",
+        ]
+        return any(k in q for k in out_scope_markers)
 
     def _enforce_reply_policy(self, reply: str, company_name: str, chat_history: List[ChatMessage]) -> str:
         text = (reply or "").strip()
@@ -184,10 +206,6 @@ class QueryHandler:
                 break
         if last_assistant and last_assistant == text:
             return "I dont know about that specific thing. We will transfer your conversation to a human agent."
-
-        if company_name and company_name.lower() not in lower:
-            # Prefix company name context if missing.
-            text = f"{company_name}: {text}"
         return text
     # === ADD: end helper methods ===
 
@@ -247,6 +265,10 @@ class QueryHandler:
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
+            if self._is_out_of_scope_query(user_input):
+                return self._non_streaming_async_gen(
+                    "I dont know about that specific thing. We will transfer your conversation to a human agent."
+                )
 
             # Run synchronous monitoring directly to avoid PyTorch deadlock on macOS threads
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
@@ -360,6 +382,10 @@ class QueryHandler:
             
             if not user_input.strip():
                 return {'response': 'Please provide a valid query'}
+            if self._is_out_of_scope_query(user_input):
+                return self._non_streaming_sync_gen(
+                    "I dont know about that specific thing. We will transfer your conversation to a human agent."
+                )
 
             monitoring_result = hybrid_monitoring_agent.monitor_interaction(
                 user_input,
