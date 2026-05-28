@@ -24,11 +24,27 @@ function buildUsagePayload(user) {
 }
 
 async function authMiddleware(req, res, next) {
-  const token = req.cookies?.token || readBearerToken(req);
-  if (!token) return res.status(401).json({ success: false, message: 'Unauthorised' });
+  const bearerToken = readBearerToken(req);
+  const cookieToken = req.cookies?.token || null;
+  const tokenCandidates = [bearerToken, cookieToken].filter(Boolean);
+  if (tokenCandidates.length === 0) return res.status(401).json({ success: false, message: 'Unauthorised' });
+
+  let decoded = null;
+  let lastErr = null;
+  for (const t of tokenCandidates) {
+    try {
+      decoded = jwt.verify(t, JWT_SECRET);
+      if (decoded) break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!decoded) {
+    console.error('JWT or authMiddleware error:', lastErr?.message || 'Invalid token');
+    return res.status(401).json({ success: false, message: 'Unauthorised' });
+  }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
     // Load the fresh user from DB (so we can check isBlocked / blockedUntil)
     const user = await userRepo.findById(decoded.id);
     if (!user) return res.status(401).json({ success: false, message: 'Unauthorised' });
@@ -64,7 +80,7 @@ async function authMiddleware(req, res, next) {
     req.account = user;
     return next();
   } catch (err) {
-    console.error('JWT or authMiddleware error:', err.message || err);
+    console.error('authMiddleware error:', err.message || err);
     return res.status(401).json({ success: false, message: 'Unauthorised' });
   }
 }
