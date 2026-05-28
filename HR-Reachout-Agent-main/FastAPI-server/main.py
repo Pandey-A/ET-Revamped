@@ -716,6 +716,7 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
     charge_type = None
     billing_user = None
     is_widget = session_id.startswith("widget_") or session_id.startswith("w_") or session_id.startswith("anon_")
+    usage_channel = "website_widget" if is_widget else "agent_chat"
 
     try:
         print("i am received here agent id from user 2", agent_id)
@@ -727,17 +728,17 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
             channel=wsm.channel_for_session(session_id),
         )
 
-        if is_widget and agent_id:
+        if agent_id:
             billing_user = _billing_user_for_agent(agent_id)
             if billing_user:
                 credits_store.ensure_user_account(billing_user)
                 credits_store.record_user_metric(billing_user, "total_queries_received")
-                credits_store.record_user_metric(billing_user, "total_widget_messages")
+                if is_widget:
+                    credits_store.record_user_metric(billing_user, "total_widget_messages")
+                else:
+                    credits_store.record_user_metric(billing_user, "total_agent_chat_messages")
                 if not credits_store.can_accept_message(billing_user):
-                    yield (
-                        "This chat widget is out of message credits. "
-                        "Please contact the account owner to add more credits."
-                    )
+                    yield "This agent is out of message credits. Please contact the account owner to add more credits."
                     return
                 charge_type = credits_store.deduct_user_charge(billing_user, 1)
 
@@ -758,7 +759,7 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
                 credits_store.record_user_metric(billing_user, "total_successful_replies")
                 credits_store.log_usage_event(
                     billing_user,
-                    "website_widget",
+                    usage_channel,
                     charge_type or "credit",
                     1,
                     session_id,
