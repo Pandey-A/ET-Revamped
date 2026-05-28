@@ -58,10 +58,10 @@ class QueryHandler:
         except Exception as e:
             self.logger.error(f"Error loading config: {str(e)}")
             return {
-                'OpenAI': {
-                    'model': 'gpt-4o-mini',
+                'Bedrock': {
+                    'model_id': 'meta.llama3-8b-instruct-v1:0',
                     'temperature': 0.7,
-                    'api_key': None
+                    'region': 'ap-south-1'
                 }
             }
             

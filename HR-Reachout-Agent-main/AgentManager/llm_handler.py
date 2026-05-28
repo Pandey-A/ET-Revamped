@@ -51,7 +51,16 @@ def _resolve_bedrock_model(model_id: str) -> str:
     candidate = (model_id or "").strip()
     if not candidate:
         return _bedrock_cfg["model_id"]
-    # Bedrock model ids normally include a provider prefix (meta./anthropic./amazon./openai./...)
+    # Legacy dashboard values (e.g. gpt-4o-mini / openai aliases) must never route outside Bedrock.
+    lowered = candidate.lower()
+    if (
+        lowered.startswith("gpt-")
+        or "openai" in lowered
+        or lowered.startswith("o1")
+        or lowered.startswith("o3")
+    ):
+        return _bedrock_cfg["model_id"]
+    # Bedrock model ids normally include a provider prefix (meta./anthropic./amazon./...)
     if "." not in candidate:
         return _bedrock_cfg["model_id"]
     return candidate

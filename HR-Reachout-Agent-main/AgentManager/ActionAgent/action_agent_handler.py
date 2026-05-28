@@ -10,6 +10,7 @@ from datetime import datetime
 from .jira_handler import save_ticket_locally
 import random
 import string
+import re
 
 def generate_bind_code(length: int = 5) -> str:
     chars = string.ascii_uppercase + string.digits
@@ -98,32 +99,32 @@ class ActionAgentHandler:
         return response.text.strip()
 
     def _should_escalate(self, chat_history_messages) -> bool:
-        """Use the LLM to decide if the conversation needs human escalation.
-
-        Instead of OpenAI-specific chat_with_tools, we use a simple prompt-based
-        approach that works with any LLM (including Bedrock OSS models).
-        """
-        content = self.system_prompt.template
-        system_message = ChatMessage(role=MessageRole.SYSTEM, content=content)
-        temp_history = [system_message] + chat_history_messages
-
-        # Build a text prompt asking the LLM to decide
-        decision_prompt = (
-            "Based on the conversation above, should this conversation be escalated "
-            "to a human agent? Consider if the user explicitly asked for a human, "
-            "if the AI cannot answer their question, or if there is frustration.\n\n"
-            "Reply with ONLY one word: ESCALATE or NO_ESCALATE"
-        )
-        temp_history.append(ChatMessage(role=MessageRole.USER, content=decision_prompt))
-
-        try:
-            response = self.llm.chat(temp_history)
-            decision = response.message.content.strip().upper()
-            logging.info(f"Escalation decision: {decision}")
-            return "ESCALATE" in decision
-        except Exception as e:
-            logging.error(f"Error during escalation decision: {type(e).__name__}: {e}")
+        """Escalate ONLY when user explicitly asks for a human agent."""
+        if not chat_history_messages:
             return False
+        last_user_text = ""
+        for msg in reversed(chat_history_messages):
+            role = str(getattr(msg, "role", "")).lower()
+            if "user" in role:
+                last_user_text = str(getattr(msg, "content", "") or "").strip().lower()
+                break
+        if not last_user_text:
+            return False
+
+        explicit_patterns = (
+            r"\bhuman agent\b",
+            r"\bhuman support\b",
+            r"\bconnect me to (a )?human\b",
+            r"\btalk to (a )?human\b",
+            r"\bchat with (a )?human\b",
+            r"\btransfer (me )?to (a )?human\b",
+            r"\bescalate (this )?(chat|issue|ticket)?\b",
+            r"\blive agent\b",
+            r"\breal person\b",
+        )
+        should = any(re.search(p, last_user_text) for p in explicit_patterns)
+        logging.info(f"Escalation explicit-request decision: {should} | text={last_user_text!r}")
+        return should
 
     def process_user_input(self, session_id: str) -> dict:
         chat_history = self.chat_history_handler.get_chat_history(session_id)
