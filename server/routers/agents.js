@@ -15,6 +15,15 @@ function toIso(v) {
   return String(v);
 }
 
+const BEDROCK_DEFAULT_MODEL =
+  (process.env.BEDROCK_DEFAULT_MODEL || 'meta.llama3-8b-instruct-v1:0').trim();
+
+function resolveRuntimeModel(model) {
+  const m = (model || '').trim();
+  if (m.includes('.')) return m;
+  return BEDROCK_DEFAULT_MODEL;
+}
+
 function pickContactFields(agent) {
   const extra =
     agent.extra && typeof agent.extra === 'object' && !Array.isArray(agent.extra) ? agent.extra : {};
@@ -40,10 +49,11 @@ async function syncAgentToFastapi(agent) {
   const contacts = pickContactFields(agent);
   const body = {
     id: agent.id,
+    owner_user_id: agent.owner_user_id,
     name: agent.name,
     description: agent.description,
     greeting_message: agent.greeting_message,
-    model: agent.model,
+    model: resolveRuntimeModel(agent.model),
     temperature: agent.temperature,
     escalation_channel: agent.escalation_channel,
     collection_name: agent.collection_name,
@@ -73,6 +83,29 @@ async function syncAgentToFastapi(agent) {
   }
   return data;
 }
+
+router.post('/agents/:id/sync-runtime', authMiddleware, async (req, res) => {
+  try {
+    const agent = await aiAgentRepo.findByIdForOwner(String(req.params.id), req.user.id);
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+    if (!FASTAPI_SYNC) {
+      return res.status(503).json({
+        success: false,
+        message: 'AI_AGENT_API_URL / FASTAPI_AGENT_SYNC_URL is not configured',
+      });
+    }
+    const data = await syncAgentToFastapi(agent);
+    return res.json({ success: true, message: 'Agent synced to AI runtime', data });
+  } catch (e) {
+    console.error('sync-runtime', e);
+    return res.status(e.status || 502).json({
+      success: false,
+      message: e.message || 'Failed to sync agent to AI runtime',
+    });
+  }
+});
 
 router.get('/agents', authMiddleware, async (req, res) => {
   try {

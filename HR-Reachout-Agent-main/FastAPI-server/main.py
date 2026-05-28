@@ -43,6 +43,8 @@ from AgentManager.telegram.sender import TelegramSender
 from AgentManager.whatsapp_handler import whatsapp_api, WhatsAppCloudAPI
 from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
 from AgentManager import widget_session_manager as wsm
+from AgentManager import credits_store
+from AgentManager.credits_greetings import greeting_reply
 
 TICKETS_DB = "tickets_store.json"
 AGENTS_DB = "Agents_store.json"
@@ -245,6 +247,21 @@ def _get_agent_config(agent_id: str) -> Dict[str, Any]:
     return {}
 
 
+def _require_agent_in_runtime(agent_id: str) -> None:
+    """WhatsApp channels must reference an agent present in Agents_store.json (Express sync)."""
+    if not agent_id or not str(agent_id).strip():
+        raise HTTPException(status_code=400, detail="ai_agent_id is required")
+    if not _get_agent_config(agent_id.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Agent '{agent_id}' is not registered on the AI runtime. "
+                "Open AI Agents in the dashboard, edit the agent, and save it once (or run "
+                "npm run agents:sync-fastapi on the server) before linking WhatsApp."
+            ),
+        )
+
+
 class WhatsAppChannelCreate(BaseModel):
     whatsapp_business_account_id: str
     phone_number_id: str
@@ -290,6 +307,12 @@ async def verify_whatsapp_webhook(request: Request):
     return JSONResponse(status_code=403, content={"error": "Verification failed"})
 
 
+def _billing_user_for_agent(agent_id: Optional[str]) -> Optional[str]:
+    if not agent_id:
+        return None
+    return credits_store.get_agent_owner(agent_id)
+
+
 async def async_process_whatsapp(
     session_id: str,
     phone: str,
@@ -297,7 +320,13 @@ async def async_process_whatsapp(
     waba_id: str = None,
     phone_number_id: str = None,
     display_phone_number: str = None,
+    inbound_message_id: str = None,
 ):
+    charge_type = None
+    billing_user = None
+    dynamic_api = None
+    to_phone = "+" + str(phone).replace("+", "").replace(" ", "")
+
     try:
         if mongo_db is None:
             logging.error("[WhatsApp] MongoDB is not configured. Cannot process incoming message.")
@@ -329,6 +358,37 @@ async def async_process_whatsapp(
             )
             return
 
+        dynamic_api = WhatsAppCloudAPI(
+            phone_number_id=mapped_phone_number_id,
+            access_token=access_token,
+            admin_phone=admin_phone,
+        )
+        dynamic_api.send_typing_indicator(to_phone, message_id=inbound_message_id)
+
+        billing_user = _billing_user_for_agent(agent_id)
+        if billing_user:
+            credits_store.ensure_user_account(billing_user)
+            credits_store.record_user_metric(billing_user, "total_queries_received")
+            credits_store.record_user_metric(billing_user, "total_whatsapp_messages")
+
+        canned_greeting = greeting_reply(text)
+        if canned_greeting:
+            if billing_user:
+                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
+            chat_history_handler.add_message(session_id, "assistant", canned_greeting)
+            dynamic_api.send_whatsapp_message(to_phone, canned_greeting)
+            return
+
+        if billing_user and not credits_store.can_accept_message(billing_user):
+            dynamic_api.send_whatsapp_message(
+                to_phone,
+                "Your account is out of message credits. Please contact support to add more credits.",
+            )
+            return
+
+        if billing_user:
+            charge_type = credits_store.deduct_user_charge(billing_user, 1)
+
         response_gen = await query_handler.aprocess_query(text, session_id, agent_id)
 
         full_response = ""
@@ -349,14 +409,22 @@ async def async_process_whatsapp(
                 full_response = f"{greeting_message}\n\n{full_response}"
 
             chat_history_handler.add_message(session_id, "assistant", full_response)
-            from AgentManager.whatsapp_handler import WhatsAppCloudAPI
+            send_result = dynamic_api.send_whatsapp_message(to_phone, full_response)
+            if send_result.get("status") != "success":
+                logging.error(
+                    f"[WhatsApp] Outbound reply failed for session {session_id}: {send_result.get('error')}"
+                )
 
-            dynamic_api = WhatsAppCloudAPI(
-                phone_number_id=mapped_phone_number_id,
-                access_token=access_token,
-                admin_phone=admin_phone,
-            )
-            dynamic_api.send_whatsapp_message("+" + phone.replace("+", ""), full_response)
+            if billing_user:
+                credits_store.record_user_metric(billing_user, "total_successful_replies")
+                credits_store.log_usage_event(
+                    billing_user,
+                    "whatsapp",
+                    charge_type or "credit",
+                    1,
+                    session_id,
+                    agent_id or "",
+                )
 
             extract_and_save_lead(
                 session_id,
@@ -366,9 +434,18 @@ async def async_process_whatsapp(
                 access_token=access_token,
                 phone_number_id=mapped_phone_number_id,
             )
+        elif billing_user and charge_type:
+            credits_store.refund_user_charge(billing_user, charge_type, 1)
+            credits_store.record_user_metric(billing_user, "total_failed_replies")
 
     except Exception as e:
         logging.error(f"Failed in async_process_whatsapp: {e}")
+        if billing_user and charge_type:
+            try:
+                credits_store.refund_user_charge(billing_user, charge_type, 1)
+                credits_store.record_user_metric(billing_user, "total_failed_replies")
+            except Exception:
+                pass
 
 
 @app.post("/webhook/whatsapp")
@@ -425,6 +502,7 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                                     waba_id,
                                     phone_number_id,
                                     display_phone_number,
+                                    msg.get("id"),
                                 )
                             else:
                                 msg_type = msg.get("type") or "unknown"
@@ -700,6 +778,10 @@ async def agent_response_generator(user_input: str, session_id: str, agent_id: s
 
 
 async def agent_response_generator_chat(user_input: str, session_id: str, agent_id: str):
+    charge_type = None
+    billing_user = None
+    is_widget = session_id.startswith("widget_") or session_id.startswith("w_") or session_id.startswith("anon_")
+
     try:
         print("i am received here agent id from user 2", agent_id)
         agent_cfg = _get_agent_config(agent_id) if agent_id else {}
@@ -709,6 +791,21 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
             agent_cfg.get("name", ""),
             channel=wsm.channel_for_session(session_id),
         )
+
+        if is_widget and agent_id:
+            billing_user = _billing_user_for_agent(agent_id)
+            if billing_user:
+                credits_store.ensure_user_account(billing_user)
+                credits_store.record_user_metric(billing_user, "total_queries_received")
+                credits_store.record_user_metric(billing_user, "total_widget_messages")
+                if not credits_store.can_accept_message(billing_user):
+                    yield (
+                        "This chat widget is out of message credits. "
+                        "Please contact the account owner to add more credits."
+                    )
+                    return
+                charge_type = credits_store.deduct_user_charge(billing_user, 1)
+
         response_gen = await query_handler.aprocess_query(user_input, session_id, agent_id)
         full_response = ""
 
@@ -722,11 +819,29 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
             chat_history_handler.add_message(session_id, "assistant", full_response)
             logging.info(f"Response Generated: {full_response}")
             wsm.touch_activity(session_id, increment_messages=2)
+            if billing_user:
+                credits_store.record_user_metric(billing_user, "total_successful_replies")
+                credits_store.log_usage_event(
+                    billing_user,
+                    "website_widget",
+                    charge_type or "credit",
+                    1,
+                    session_id,
+                    agent_id or "",
+                )
         else:
+            if billing_user and charge_type:
+                credits_store.refund_user_charge(billing_user, charge_type, 1)
+                credits_store.record_user_metric(billing_user, "total_failed_replies")
             logging.info("Some Error has occurred. Unexpected Response")
             yield "Some Error has occurred. Please try once again"
     except Exception as e:
         print(f"Error: {e}")
+        if billing_user and charge_type:
+            try:
+                credits_store.refund_user_charge(billing_user, charge_type, 1)
+            except Exception:
+                pass
         yield "An error occurred. Please try again."
 
 
@@ -775,6 +890,7 @@ async def get_all_agents():
 async def create_whatsapp_channel(payload: WhatsAppChannelCreate):
     if mongo_db is None:
         raise HTTPException(status_code=500, detail="MongoDB is not configured")
+    _require_agent_in_runtime(payload.ai_agent_id)
     now = datetime.utcnow().isoformat()
     waba = _normalize_whatsapp_business_account_id(payload.whatsapp_business_account_id)
     phone_id = _normalize_whatsapp_phone_number_id(payload.phone_number_id)
@@ -834,6 +950,8 @@ async def update_whatsapp_channel(id: str, payload: WhatsAppChannelUpdate):
         cleaned_updates["phone_number_id"] = _normalize_whatsapp_phone_number_id(
             cleaned_updates["phone_number_id"]
         )
+    if "ai_agent_id" in cleaned_updates:
+        _require_agent_in_runtime(cleaned_updates["ai_agent_id"])
     cleaned_updates["updated_at"] = datetime.utcnow().isoformat()
 
     if "whatsapp_business_account_id" in cleaned_updates or "phone_number_id" in cleaned_updates:
@@ -906,6 +1024,10 @@ async def upload_agent_data(request: Request):
         with open(AGENTS_DB, "w") as file:
             json.dump(existing_data, file, indent=4)
 
+        owner_user_id = (agent_data.get("owner_user_id") or "").strip()
+        if agent_id and owner_user_id:
+            credits_store.set_agent_owner(agent_id, owner_user_id)
+
         return {
             "message": "Agent updated successfully" if updated else "Agent saved successfully"
         }
@@ -913,6 +1035,63 @@ async def upload_agent_data(request: Request):
     except Exception as e:
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+class CreditsOnboardBody(BaseModel):
+    user_id: str
+    plan: str
+    custom_credits: Optional[int] = None
+    allow_overdraft: Optional[bool] = False
+    overdraft_rate: Optional[int] = 0
+
+
+@app.get("/credits/billing")
+async def get_credits_billing(user_id: str):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    uid = user_id.strip()
+    credits_store.ensure_user_account(uid, initial_credits=100)
+    return credits_store.get_user_billing_and_monitoring(uid)
+
+
+@app.post("/credits/onboard")
+async def post_credits_onboard(body: CreditsOnboardBody):
+    plan = (body.plan or "").strip()
+    if plan not in ("Basic", "Pro", "Enterprise", "Free"):
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    uid = body.user_id.strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    if plan in ("Basic", "Pro"):
+        credits_to_add = body.custom_credits if body.custom_credits is not None else 2000
+        allow_overdraft = plan == "Pro"
+        overdraft_rate = 1 if plan == "Pro" else 0
+    elif plan == "Enterprise":
+        credits_to_add = body.custom_credits if body.custom_credits is not None else 0
+        allow_overdraft = bool(body.allow_overdraft)
+        overdraft_rate = int(body.overdraft_rate or 0)
+    else:
+        credits_to_add = body.custom_credits if body.custom_credits is not None else 100
+        allow_overdraft = False
+        overdraft_rate = 0
+
+    account = credits_store.onboard_user_plan(
+        uid, plan, credits_to_add, allow_overdraft, overdraft_rate
+    )
+    return {"status": "success", "account": account}
+
+
+@app.post("/credits/add")
+async def post_credits_add(payload: dict = Body(...)):
+    """Add credits to an account (negative amount in deduct = add)."""
+    user_id = (payload.get("user_id") or "").strip()
+    amount = int(payload.get("amount") or 0)
+    if not user_id or amount <= 0:
+        raise HTTPException(status_code=400, detail="user_id and positive amount required")
+    credits_store.deduct_user_credits(user_id, -amount)
+    return credits_store.get_user_billing_and_monitoring(user_id)
+
 
 # ─── Background indexing helpers ──────────────────────────────────────────────
 def _update_agent_resource(agent_id: str, resource_path: str):

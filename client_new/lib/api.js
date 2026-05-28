@@ -95,6 +95,30 @@ export function getApiBaseUrl() {
 }
 
 /** GET /agents on Express (PostgreSQL-backed, per logged-in user). */
+/** GET /credits/me — billing, metrics, recent usage (Redis via FastAPI). */
+export async function fetchMyCredits(init = {}) {
+  if (typeof window === 'undefined') return null;
+  const res = await fetch(`${resolveApiBaseUrl()}/credits/me`, {
+    credentials: 'include',
+    ...init,
+    headers: {
+      ...getAuthHeaderObject(),
+      ...(init.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.error) message = String(body.error);
+    } catch {
+      /* ignore */
+    }
+    return { error: message };
+  }
+  return res.json();
+}
+
 export async function fetchMyAgents(init = {}) {
   if (typeof window === 'undefined') return null;
   const res = await fetch(`${resolveApiBaseUrl()}/agents`, {

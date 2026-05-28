@@ -15,6 +15,8 @@ except Exception as e:
 
 GRAPH_API_VERSION = "v22.0"
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+_SEND_RETRIES = 3
+_SEND_RETRY_DELAY_SEC = 1.5
 
 
 class WhatsAppCloudAPI:
@@ -26,6 +28,43 @@ class WhatsAppCloudAPI:
         self.phone_number_id = phone_number_id or WA_CONFIG.get("phone_number_id")
         self.access_token = access_token or WA_CONFIG.get("access_token")
         self.admin_phone = admin_phone or WA_CONFIG.get("admin_phone")
+
+    def send_typing_indicator(self, to: str, message_id: str = None) -> dict:
+        """Mark message read + typing_on (Meta Cloud API). Non-fatal if unsupported."""
+        if not self.phone_number_id or not self.access_token:
+            return {"status": "error", "error": "WhatsApp credentials missing"}
+        url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+        to_digits = to.replace("+", "").replace(" ", "")
+        if message_id:
+            read_payload = {
+                "messaging_product": "whatsapp",
+                "status": "read",
+                "message_id": message_id,
+            }
+            try:
+                requests.post(url, headers=headers, json=read_payload, timeout=8)
+            except requests.exceptions.RequestException:
+                pass
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_digits,
+            "sender_action": "typing_on",
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+            result = resp.json()
+            if resp.status_code in (200, 201):
+                return {"status": "success", "response": result}
+            logger.warning(f"[WhatsApp] typing_on {resp.status_code}: {result}")
+            return {"status": "error", "error": result}
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[WhatsApp] typing_on failed: {e}")
+            return {"status": "error", "error": str(e)}
 
     def _send_message(self, to: str, text: str) -> dict:
         """Send a text message via WhatsApp Cloud API."""
@@ -44,18 +83,42 @@ class WhatsAppCloudAPI:
             "text": {"body": text},
         }
 
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=15)
-            result = resp.json()
-            if resp.status_code in (200, 201):
-                logger.info(f"[WhatsApp] Message sent to {to}: {result}")
-                return {"status": "success", "response": result}
-            else:
-                logger.error(f"[WhatsApp] API error {resp.status_code}: {result}")
+        import time
+
+        last_error = None
+        for attempt in range(1, _SEND_RETRIES + 1):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=20)
+                result = resp.json()
+                if resp.status_code in (200, 201):
+                    logger.info(f"[WhatsApp] Message sent to {to}: {result}")
+                    return {"status": "success", "response": result}
+                last_error = result
+                err_obj = result.get("error", {}) if isinstance(result, dict) else {}
+                err_code = err_obj.get("code")
+                err_msg = err_obj.get("message", "")
+                logger.error(
+                    f"[WhatsApp] API error {resp.status_code} (attempt {attempt}/{_SEND_RETRIES}): {result}"
+                )
+                if err_code in (190, 102) or "expired" in str(err_msg).lower():
+                    return {
+                        "status": "error",
+                        "error": "WhatsApp access token expired or invalid. Update the token in WhatsApp Channels.",
+                        "meta": result,
+                    }
+                if resp.status_code >= 500 and attempt < _SEND_RETRIES:
+                    time.sleep(_SEND_RETRY_DELAY_SEC * attempt)
+                    continue
                 return {"status": "error", "error": result}
-        except requests.exceptions.RequestException as e:
-            logger.error(f"[WhatsApp] Request failed: {e}")
-            return {"status": "error", "error": str(e)}
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                logger.error(
+                    f"[WhatsApp] Request failed (attempt {attempt}/{_SEND_RETRIES}): {e}"
+                )
+                if attempt < _SEND_RETRIES:
+                    time.sleep(_SEND_RETRY_DELAY_SEC * attempt)
+                    continue
+        return {"status": "error", "error": last_error}
 
     def send_whatsapp_message(
         self,

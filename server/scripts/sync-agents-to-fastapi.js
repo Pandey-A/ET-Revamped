@@ -12,6 +12,15 @@ const FASTAPI_BASE = (process.env.FASTAPI_AGENT_SYNC_URL || process.env.AI_AGENT
   .trim()
   .replace(/\/$/, '');
 
+const BEDROCK_DEFAULT_MODEL =
+  (process.env.BEDROCK_DEFAULT_MODEL || 'meta.llama3-8b-instruct-v1:0').trim();
+
+function resolveRuntimeModel(model) {
+  const m = (model || '').trim();
+  if (m.includes('.')) return m;
+  return BEDROCK_DEFAULT_MODEL;
+}
+
 function toIso(v) {
   if (!v) return new Date().toISOString();
   if (v instanceof Date) return v.toISOString();
@@ -22,10 +31,11 @@ async function syncOne(agent) {
   const extra = agent.extra && typeof agent.extra === 'object' ? agent.extra : {};
   const body = {
     id: agent.id,
+    owner_user_id: agent.owner_user_id,
     name: agent.name,
     description: agent.description,
     greeting_message: agent.greeting_message,
-    model: agent.model,
+    model: resolveRuntimeModel(agent.model),
     temperature: agent.temperature,
     escalation_channel: agent.escalation_channel,
     collection_name: agent.collection_name,
@@ -55,7 +65,7 @@ async function main() {
   }
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT id, name, description, greeting_message, model, temperature,
+    `SELECT id, owner_user_id, name, description, greeting_message, model, temperature,
             escalation_channel, collection_name, resource_list, public_embed, extra, created_at
      FROM ai_agents ORDER BY created_at ASC`
   );

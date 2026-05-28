@@ -144,18 +144,8 @@ def extract_and_save_lead(
             # Save and Send
             _save_to_excel(lead_data)
             _send_to_webhook(lead_data, agent_id)
-            whatsapp_api.send_lead_notification(
-                {
-                    "name": data.get("name"),
-                    "email": data.get("email"),
-                    "phone": phone,
-                    "summary": data.get("summary"),
-                    "session_id": session_id,
-                },
-                admin_phone=admin_phone,
-                access_token=access_token,
-                phone_number_id=phone_number_id,
-            )
+            # Disabled by product requirement:
+            # never send chat summaries to any WhatsApp number.
             
             # Mark as done
             _mark_as_extracted(session_id)

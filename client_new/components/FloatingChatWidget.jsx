@@ -1,10 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 
-const AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || 'http://localhost:8000';
+const ENV_AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || 'http://localhost:8000';
+const ENV_AI_AGENT_API_LOCAL =
+  process.env.NEXT_PUBLIC_AI_AGENT_API_URL_LOCAL || 'http://127.0.0.1:8000';
+
+function isLocalHost(hostname = '') {
+  const h = String(hostname).toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function generateAnonSessionId() {
@@ -34,6 +41,10 @@ function storeMessages(msgs) {
 export default function FloatingChatWidget() {
   const { user } = useAuth();
   const pathname = usePathname();
+  const AI_AGENT_API = useMemo(() => {
+    if (typeof window === 'undefined') return ENV_AI_AGENT_API;
+    return isLocalHost(window.location.hostname) ? ENV_AI_AGENT_API_LOCAL : ENV_AI_AGENT_API;
+  }, []);
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');

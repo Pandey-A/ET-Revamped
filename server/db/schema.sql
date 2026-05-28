@@ -70,3 +70,28 @@ CREATE TABLE IF NOT EXISTS agent_widget_presets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_widget_presets_owner ON agent_widget_presets (owner_user_id);
+
+-- Message credits (Redis is source of truth; PG mirrors for reporting and audit).
+CREATE TABLE IF NOT EXISTS user_credit_accounts (
+  user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+  plan TEXT NOT NULL DEFAULT 'Free',
+  available_credits INTEGER NOT NULL DEFAULT 0,
+  money_balance INTEGER NOT NULL DEFAULT 0,
+  billing_status TEXT NOT NULL DEFAULT 'active',
+  allow_overdraft BOOLEAN NOT NULL DEFAULT false,
+  overdraft_rate INTEGER NOT NULL DEFAULT 0,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS credit_usage_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,
+  charge_type TEXT NOT NULL DEFAULT 'credit',
+  amount INTEGER NOT NULL DEFAULT 1 CHECK (amount > 0),
+  session_id TEXT,
+  agent_id TEXT,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_credit_usage_events_user ON credit_usage_events (user_id, occurred_at DESC);

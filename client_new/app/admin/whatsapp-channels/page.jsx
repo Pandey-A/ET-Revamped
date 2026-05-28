@@ -7,8 +7,39 @@ import Footer from "@/components/Footer";
 import { ToastContainer, toast } from "react-toastify";
 import { motion, AnimatePresence } from "framer-motion";
 import "react-toastify/dist/ReactToastify.css";
+import { getApiBaseUrl } from "@/lib/api";
+import { getAuthHeaderObject } from "@/lib/authToken";
 
-const AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
+const ENV_AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
+const ENV_AI_AGENT_API_LOCAL =
+  process.env.NEXT_PUBLIC_AI_AGENT_API_URL_LOCAL || "http://127.0.0.1:8000";
+
+function isLocalHost(hostname = "") {
+  const h = String(hostname).toLowerCase();
+  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+}
+
+const AI_AGENT_API =
+  typeof window !== "undefined" && isLocalHost(window.location.hostname)
+    ? ENV_AI_AGENT_API_LOCAL
+    : ENV_AI_AGENT_API;
+
+async function syncAgentToRuntime(agentId) {
+  if (!agentId) return;
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/agents/${encodeURIComponent(agentId)}/sync-runtime`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...getAuthHeaderObject() },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn("Agent runtime sync:", body.message || res.status);
+    }
+  } catch (e) {
+    console.warn("Agent runtime sync failed:", e);
+  }
+}
 
 function EmptyChannels() {
   return (
@@ -135,6 +166,8 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || "Failed to save channel");
+
+      await syncAgentToRuntime(form.ai_agent_id);
 
       toast.success(isEdit ? "Channel updated." : "Channel created.");
       onSaved(data, isEdit);

@@ -10,6 +10,7 @@ const auth = require('./routers/auth-route');
 const adminRoute = require('./routers/admin');
 const uploadRoute = require('./routers/upload');
 const agentsRoute = require('./routers/agents');
+const creditsRoute = require('./routers/credits');
 const { createRateLimiter } = require('./middleware/security');
 
 const app = express();
@@ -105,6 +106,7 @@ app.use('/api', globalLimiter);
 app.use('/api/auth', authLimiter, auth);
 app.use('/api/admin', adminRoute);
 app.use('/api', agentsRoute);
+app.use('/api', creditsRoute);
 app.use('/api', uploadRoute);
 app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 

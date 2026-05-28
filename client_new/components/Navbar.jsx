@@ -100,6 +100,9 @@ const Navbar = () => {
             <a href="/admin/ai-agents/" className="text-sm font-light text-black transition-colors hover:opacity-70">AI Agents</a>
             <a href="/admin/" className="text-sm font-light text-black transition-colors hover:opacity-70">Admin</a>
             <a href="/admin/whatsapp-channels/" className="text-sm font-light text-black transition-colors hover:opacity-70">WhatsApp</a>
+            {isAuthenticated && (
+              <a href="/credits/" className="text-sm font-light text-black transition-colors hover:opacity-70">Credits</a>
+            )}
           </div>
         )}
 
@@ -132,6 +135,9 @@ const Navbar = () => {
           <a href="/admin/ai-agents/" onClick={closeMobile} className="text-base font-medium text-black">AI Agents</a>
           <a href="/admin/" onClick={closeMobile} className="text-base font-medium text-black">Admin</a>
           <a href="/admin/whatsapp-channels/" onClick={closeMobile} className="text-base font-medium text-black">WhatsApp</a>
+          {isAuthenticated && (
+            <a href="/credits/" onClick={closeMobile} className="text-base font-medium text-black">Credits</a>
+          )}
           <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col gap-3">
             {authRight(true)}
           </div>

@@ -1,8 +1,3 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const defaultOrigins = [
   'elevatetrust.in',
   'www.elevatetrust.in',
@@ -19,9 +14,6 @@ const extraOrigins = (process.env.NEXT_ALLOWED_ORIGINS || '')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  turbopack: {
-    root: __dirname,
-  },
   output: 'standalone',
   trailingSlash: true,
   images: {
