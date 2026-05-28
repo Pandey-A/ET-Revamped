@@ -8,6 +8,12 @@ const router = express.Router();
 const FASTAPI_SYNC = (process.env.FASTAPI_AGENT_SYNC_URL || process.env.AI_AGENT_API_URL || '')
   .trim()
   .replace(/\/$/, '');
+const INTERNAL_API_KEY = (process.env.INTERNAL_API_KEY || '').trim();
+
+function internalAllowed(req) {
+  if (!INTERNAL_API_KEY) return false;
+  return String(req.headers['x-internal-api-key'] || '').trim() === INTERNAL_API_KEY;
+}
 
 function toIso(v) {
   if (!v) return new Date().toISOString();
@@ -104,6 +110,27 @@ router.post('/agents/:id/sync-runtime', authMiddleware, async (req, res) => {
       success: false,
       message: e.message || 'Failed to sync agent to AI runtime',
     });
+  }
+});
+
+router.post('/internal/agents/:id/resources', async (req, res) => {
+  try {
+    if (!internalAllowed(req)) {
+      return res.status(401).json({ success: false, message: 'Unauthorised internal request' });
+    }
+    const agentId = String(req.params.id || '').trim();
+    const resourcePath = String(req.body?.resource_path || '').trim();
+    if (!agentId || !resourcePath) {
+      return res.status(400).json({ success: false, message: 'agent id and resource_path are required' });
+    }
+    const agent = await aiAgentRepo.appendResourceByAgentId(agentId, resourcePath);
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+    return res.json({ success: true, agent });
+  } catch (e) {
+    console.error('append internal resource', e);
+    return res.status(500).json({ success: false, message: 'Failed to append resource' });
   }
 });
 

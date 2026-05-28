@@ -61,6 +61,25 @@ CREATE TABLE IF NOT EXISTS ai_agents (
 
 CREATE INDEX IF NOT EXISTS idx_ai_agents_owner ON ai_agents (owner_user_id);
 
+-- WhatsApp channels (single webhook, multi-tenant).
+-- A single WABA ID / phone number ID must not be reused across tenants.
+CREATE TABLE IF NOT EXISTS whatsapp_channels (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  whatsapp_business_account_id TEXT NOT NULL UNIQUE,
+  phone_number_id TEXT NOT NULL UNIQUE,
+  display_phone_number TEXT NOT NULL DEFAULT '',
+  access_token TEXT NOT NULL,
+  ai_agent_id TEXT NOT NULL REFERENCES ai_agents (id) ON DELETE CASCADE,
+  ai_agent_name TEXT NOT NULL DEFAULT '',
+  admin_phone TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_whatsapp_channels_owner ON whatsapp_channels (owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_channels_agent ON whatsapp_channels (ai_agent_id);
+
 -- Last widget generator snapshot per agent (JSON matches generator form + framework flags).
 CREATE TABLE IF NOT EXISTS agent_widget_presets (
   agent_id TEXT PRIMARY KEY REFERENCES ai_agents (id) ON DELETE CASCADE,

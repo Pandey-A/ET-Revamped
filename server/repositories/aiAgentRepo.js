@@ -171,6 +171,21 @@ async function getWidgetPreset(agentId, ownerUserId) {
   return rows[0]?.config_json ?? null;
 }
 
+async function appendResourceByAgentId(agentId, resourcePath) {
+  const { rows } = await query(`SELECT resource_list FROM ai_agents WHERE id = $1 LIMIT 1`, [String(agentId)]);
+  if (!rows[0]) return null;
+  const current = Array.isArray(rows[0].resource_list) ? rows[0].resource_list : [];
+  if (current.includes(resourcePath)) {
+    return findById(agentId);
+  }
+  const next = [...current, resourcePath];
+  await query(`UPDATE ai_agents SET resource_list = $2::jsonb, updated_at = now() WHERE id = $1`, [
+    String(agentId),
+    JSON.stringify(next),
+  ]);
+  return findById(agentId);
+}
+
 module.exports = {
   listByOwner,
   findByIdForOwner,
@@ -180,5 +195,6 @@ module.exports = {
   updateAgentForOwner,
   upsertWidgetPreset,
   getWidgetPreset,
+  appendResourceByAgentId,
   mapAgentRow,
 };

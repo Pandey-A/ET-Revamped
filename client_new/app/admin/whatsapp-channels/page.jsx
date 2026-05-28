@@ -10,19 +10,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { getApiBaseUrl } from "@/lib/api";
 import { getAuthHeaderObject } from "@/lib/authToken";
 
-const ENV_AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
-const ENV_AI_AGENT_API_LOCAL =
-  process.env.NEXT_PUBLIC_AI_AGENT_API_URL_LOCAL || "http://127.0.0.1:8000";
-
-function isLocalHost(hostname = "") {
-  const h = String(hostname).toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
-}
-
-const AI_AGENT_API =
-  typeof window !== "undefined" && isLocalHost(window.location.hostname)
-    ? ENV_AI_AGENT_API_LOCAL
-    : ENV_AI_AGENT_API;
+const API_BASE = getApiBaseUrl();
 
 async function syncAgentToRuntime(agentId) {
   if (!agentId) return;
@@ -152,25 +140,26 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
 
     setSaving(true);
     try {
-      const isEdit = Boolean(channel?._id);
+      const isEdit = Boolean(channel?.id);
       const url = isEdit
-        ? `${AI_AGENT_API}/whatsapp/config/${channel._id}`
-        : `${AI_AGENT_API}/whatsapp/config`;
+        ? `${API_BASE}/whatsapp-channels/${channel.id}`
+        : `${API_BASE}/whatsapp-channels`;
       const method = isEdit ? "PUT" : "POST";
 
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getAuthHeaderObject() },
         body: JSON.stringify(form),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || data.error || "Failed to save channel");
+      if (!res.ok) throw new Error(data.message || data.detail || data.error || "Failed to save channel");
 
       await syncAgentToRuntime(form.ai_agent_id);
 
       toast.success(isEdit ? "Channel updated." : "Channel created.");
-      onSaved(data, isEdit);
+      onSaved(data.channel, isEdit);
       onClose();
     } catch (err) {
       toast.error(err.message || "Could not save channel");
@@ -285,13 +274,19 @@ export default function WhatsAppChannelsPage() {
     setLoading(true);
     try {
       const [channelsRes, agentsRes] = await Promise.all([
-        fetch(`${AI_AGENT_API}/whatsapp/config`),
-        fetch(`${AI_AGENT_API}/agents`),
+        fetch(`${API_BASE}/whatsapp-channels`, {
+          credentials: "include",
+          headers: { ...getAuthHeaderObject() },
+        }),
+        fetch(`${API_BASE}/agents`, {
+          credentials: "include",
+          headers: { ...getAuthHeaderObject() },
+        }),
       ]);
 
-      const channelsData = channelsRes.ok ? await channelsRes.json() : [];
+      const channelsData = channelsRes.ok ? await channelsRes.json() : { channels: [] };
       const agentsData = agentsRes.ok ? await agentsRes.json() : [];
-      setChannels(Array.isArray(channelsData) ? channelsData : []);
+      setChannels(Array.isArray(channelsData?.channels) ? channelsData.channels : []);
       setAgents(Array.isArray(agentsData) ? agentsData : []);
     } catch {
       toast.error("Failed to load WhatsApp channels.");
@@ -306,21 +301,23 @@ export default function WhatsAppChannelsPage() {
 
   const handleSaved = (savedChannel, isEdit) => {
     if (isEdit) {
-      setChannels((prev) => prev.map((c) => (c._id === savedChannel._id ? savedChannel : c)));
+      setChannels((prev) => prev.map((c) => (c.id === savedChannel.id ? savedChannel : c)));
       return;
     }
     setChannels((prev) => [savedChannel, ...prev]);
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget?._id) return;
+    if (!deleteTarget?.id) return;
     try {
-      const res = await fetch(`${AI_AGENT_API}/whatsapp/config/${deleteTarget._id}`, {
+      const res = await fetch(`${API_BASE}/whatsapp-channels/${deleteTarget.id}`, {
         method: "DELETE",
+        credentials: "include",
+        headers: { ...getAuthHeaderObject() },
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || data.error || "Delete failed");
-      setChannels((prev) => prev.filter((c) => c._id !== deleteTarget._id));
+      if (!res.ok) throw new Error(data.message || data.detail || data.error || "Delete failed");
+      setChannels((prev) => prev.filter((c) => c.id !== deleteTarget.id));
       toast.success("Channel deleted.");
       setDeleteTarget(null);
     } catch (err) {
@@ -379,7 +376,7 @@ export default function WhatsAppChannelsPage() {
             <AnimatePresence>
               {channels.map((channel) => (
                 <ChannelCard
-                  key={channel._id}
+                  key={channel.id}
                   channel={channel}
                   onEdit={(target) => {
                     setEditingChannel(target);
