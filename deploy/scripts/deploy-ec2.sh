@@ -111,9 +111,16 @@ fi
 
 echo "==> Pulling latest code (${BRANCH})"
 cd "${APP_DIR}"
-sudo -u ubuntu git fetch origin
-sudo -u ubuntu git checkout "${BRANCH}"
-sudo -u ubuntu git pull origin "${BRANCH}" || true
+if [[ "${SKIP_GIT_PULL:-}" == "1" ]]; then
+  echo "SKIP_GIT_PULL=1 — using code already on disk (rsync/scp deploy)."
+else
+  if sudo -u ubuntu git fetch origin 2>/dev/null; then
+    sudo -u ubuntu git checkout "${BRANCH}" 2>/dev/null || sudo -u ubuntu git checkout -B "${BRANCH}"
+    sudo -u ubuntu git pull origin "${BRANCH}" || true
+  else
+    echo "WARN: git fetch failed (no outbound HTTPS?). Continuing with existing tree."
+  fi
+fi
 
 echo "==> Starting PostgreSQL + Redis"
 docker_compose -f "${APP_DIR}/deploy/docker-compose.infra.yml" up -d
