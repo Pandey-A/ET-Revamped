@@ -58,10 +58,10 @@ class QueryHandler:
         except Exception as e:
             self.logger.error(f"Error loading config: {str(e)}")
             return {
-                'Bedrock': {
-                    'model_id': 'meta.llama3-8b-instruct-v1:0',
+                'OpenAI': {
+                    'model': 'gpt-4o-mini',
                     'temperature': 0.7,
-                    'region': 'ap-south-1'
+                    'Key': None,
                 }
             }
             
@@ -120,7 +120,7 @@ class QueryHandler:
             return "You are a helpful assistant."
 
     def _get_model_from_store(self, agent_id: Optional[str]) -> Optional[str]:
-        """Fetch Bedrock model_id from Agents_store.json for given agent_id."""
+        """Fetch OpenAI model name from Agents_store.json for given agent_id."""
         if not agent_id:
             return None
         try:

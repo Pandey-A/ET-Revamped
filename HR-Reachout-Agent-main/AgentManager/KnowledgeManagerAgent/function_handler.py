@@ -5,7 +5,8 @@ from weaviate.classes.init import AdditionalConfig, Timeout
 
 from llama_index.core import Document, VectorStoreIndex, StorageContext
 from llama_index.vector_stores.weaviate import WeaviateVectorStore
-from llama_index.embeddings.bedrock import BedrockEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
+from AgentManager.llm_handler import get_openai_api_key, get_openai_embedding_model
 
 from typing import Optional, Dict, Any
 import cohere
@@ -18,7 +19,6 @@ with open("AgentManager/config.json", "r") as config_file:
 weaviate_url = config["weaviate"]["url"]
 weaviate_api_key = config["weaviate"].get("api_key", None)
 cohere_api_key = config["cohere"]["api_key"]
-bedrock_cfg = config.get("Bedrock", {})
 # Ignore weak KB matches when Cohere rerank score is below this (filters trivia/unrelated queries).
 MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.12))
 
@@ -77,9 +77,9 @@ def _to_weaviate_class(collection_name: str) -> str:
 class RAG:
     def __init__(self, top_k: int = 5):
         self.top_k = top_k
-        self.embed_model = BedrockEmbedding(
-            model_name=bedrock_cfg.get('embed_model_id', 'amazon.titan-embed-text-v2:0'),
-            region_name=bedrock_cfg.get('region', 'ap-south-1'),
+        self.embed_model = OpenAIEmbedding(
+            model=get_openai_embedding_model(),
+            api_key=get_openai_api_key(),
         )
         self.weaviate_client = _connect_weaviate()
 

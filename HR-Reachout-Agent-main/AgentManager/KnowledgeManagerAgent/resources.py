@@ -8,7 +8,8 @@ from llama_index.readers.file import PDFReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.weaviate import WeaviateVectorStore
 from llama_index.readers.web import SimpleWebPageReader
-from llama_index.embeddings.bedrock import BedrockEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
+from AgentManager.llm_handler import get_openai_api_key, get_openai_embedding_model
 
 
 def _load_config(path='AgentManager/config.json'):
@@ -54,11 +55,10 @@ def _connect_weaviate(config):
 
 
 def _get_embed_model(config):
-    """Create a BedrockEmbedding instance using the IAM role credentials."""
-    bedrock_cfg = config['Bedrock']
-    return BedrockEmbedding(
-        model_name=bedrock_cfg.get('embed_model_id', 'amazon.titan-embed-text-v2:0'),
-        region_name=bedrock_cfg.get('region', 'ap-south-1'),
+    """Create an OpenAI embedding model for RAG indexing."""
+    return OpenAIEmbedding(
+        model=get_openai_embedding_model(),
+        api_key=get_openai_api_key(),
     )
 
 

@@ -21,13 +21,13 @@ function toIso(v) {
   return String(v);
 }
 
-const BEDROCK_DEFAULT_MODEL =
-  (process.env.BEDROCK_DEFAULT_MODEL || 'meta.llama3-8b-instruct-v1:0').trim();
+const OPENAI_DEFAULT_MODEL =
+  (process.env.OPENAI_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
 
 function resolveRuntimeModel(model) {
   const m = (model || '').trim();
-  if (m.includes('.')) return m;
-  return BEDROCK_DEFAULT_MODEL;
+  if (m) return m;
+  return OPENAI_DEFAULT_MODEL;
 }
 
 function pickContactFields(agent) {

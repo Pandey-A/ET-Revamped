@@ -1,69 +1,50 @@
-from llama_index.llms.bedrock import Bedrock
-import llama_index.llms.bedrock.utils as bedrock_utils
-import llama_index.llms.bedrock.base as bedrock_base
 from pathlib import Path
 import json
+import os
 
-from AgentManager.bedrock_llama3_utils import (
-    completion_to_llama3_prompt,
-    messages_to_llama3_prompt,
-)
+from llama_index.llms.openai import OpenAI
 
-# Monkey-patch get_provider to handle the custom "openai" provider prefix.
-# We must patch BOTH bedrock_utils AND bedrock_base because base.py does
-# `from .utils import get_provider` which creates a separate local reference.
-original_get_provider = bedrock_utils.get_provider
-def patched_get_provider(model: str):
-    try:
-        return original_get_provider(model)
-    except ValueError:
-        # If the provider (e.g. openai) is not supported by LlamaIndex natively,
-        # fallback to MetaProvider which supports standard chat formatting well.
-        return bedrock_utils.ProviderType.META.provider
-
-bedrock_utils.get_provider = patched_get_provider
-bedrock_base.get_provider = patched_get_provider
+_config_path = Path(__file__).parent / "config.json"
 
 
-# Reading the Bedrock Model config
-config_path = Path(__file__).parent / "config.json"
-with open(config_path) as config_file:
-    config = json.load(config_file)
+def _load_config() -> dict:
+    if not _config_path.exists():
+        return {}
+    with open(_config_path, encoding="utf-8") as f:
+        return json.load(f)
 
-_bedrock_cfg = config["Bedrock"]
+
+def get_openai_api_key() -> str:
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if key:
+        return key
+    cfg = _load_config().get("OpenAI", {})
+    return (cfg.get("Key") or cfg.get("api_key") or "").strip()
 
 
-def _use_llama3_prompt_format(model_id: str) -> bool:
-    """Meta Llama 3 on Bedrock needs instruct tokens, not Llama 2 [INST] format."""
-    name = (model_id or "").lower()
+def get_openai_config() -> dict:
+    cfg = _load_config().get("OpenAI", {})
+    return {
+        "model": (os.getenv("OPENAI_MODEL") or cfg.get("model") or "gpt-4o-mini").strip(),
+        "temperature": float(
+            os.getenv("OPENAI_TEMPERATURE") or cfg.get("temperature") or 0.7
+        ),
+    }
+
+
+def get_openai_embedding_model() -> str:
     return (
-        "llama3" in name
-        or "llama-3" in name
-        or name.startswith("meta.llama")
-    )
+        os.getenv("OPENAI_EMBEDDING_MODEL")
+        or _load_config().get("OpenAI", {}).get("embed_model")
+        or "text-embedding-3-small"
+    ).strip()
 
 
-def _resolve_bedrock_model(model_id: str) -> str:
-    """
-    Ensure we call Bedrock with a Bedrock-style model id.
-    Dashboard agents may still carry OpenAI names (e.g. gpt-4o-mini).
-    """
-    candidate = (model_id or "").strip()
-    if not candidate:
-        return _bedrock_cfg["model_id"]
-    # Legacy dashboard values (e.g. gpt-4o-mini / openai aliases) must never route outside Bedrock.
-    lowered = candidate.lower()
-    if (
-        lowered.startswith("gpt-")
-        or "openai" in lowered
-        or lowered.startswith("o1")
-        or lowered.startswith("o3")
-    ):
-        return _bedrock_cfg["model_id"]
-    # Bedrock model ids normally include a provider prefix (meta./anthropic./amazon./...)
-    if "." not in candidate:
-        return _bedrock_cfg["model_id"]
-    return candidate
+def resolve_openai_model(model: str | None = None) -> str:
+    candidate = (model or "").strip()
+    if candidate:
+        return candidate
+    return get_openai_config()["model"]
 
 
 class LLMHandler:
@@ -71,19 +52,14 @@ class LLMHandler:
         return
 
     def get_llm(self, model=None, temperature=None):
-        """Return a Bedrock LLM instance.
-
-        Credentials are resolved automatically from the EC2 IAM role
-        via the default boto3 credential chain — no API keys required.
-        """
-        model_id = _resolve_bedrock_model(model or _bedrock_cfg["model_id"])
-        bedrock_kwargs = {
-            "model": model_id,
-            "temperature": temperature or _bedrock_cfg.get("temperature", 0.7),
-            "region_name": _bedrock_cfg.get("region", "ap-south-1"),
-            "context_size": 128000,
-        }
-        if _use_llama3_prompt_format(model_id):
-            bedrock_kwargs["messages_to_prompt"] = messages_to_llama3_prompt
-            bedrock_kwargs["completion_to_prompt"] = completion_to_llama3_prompt
-        return Bedrock(**bedrock_kwargs)
+        cfg = get_openai_config()
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set. Add it to the environment or AgentManager/config.json OpenAI.Key."
+            )
+        return OpenAI(
+            model=resolve_openai_model(model),
+            api_key=api_key,
+            temperature=temperature if temperature is not None else cfg["temperature"],
+        )

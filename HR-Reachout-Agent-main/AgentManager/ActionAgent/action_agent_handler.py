@@ -30,8 +30,8 @@ try:
 except Exception as e:
     raise RuntimeError(f"Failed to load required configuration from config.json: {str(e)}")
 
-bedrock_cfg = config['Bedrock']
-llm = llm_handler.get_llm(bedrock_cfg['model_id'], bedrock_cfg.get('temperature', 0.7))
+_openai_cfg = config.get('OpenAI', {})
+llm = llm_handler.get_llm(_openai_cfg.get('model', 'gpt-4o-mini'), _openai_cfg.get('temperature', 0.7))
 
 
 

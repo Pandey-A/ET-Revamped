@@ -484,7 +484,7 @@ async def capture_lead(request: Request):
         try:
             chat_history = chat_history_handler.get_formatted_history(session_id)
             if chat_history and chat_history.strip():
-                # Use Bedrock via llm_handler
+                # Use OpenAI via llm_handler
                 from AgentManager import llm_handler
                 summary_llm = llm_handler.get_llm()
                 summary_prompt = (

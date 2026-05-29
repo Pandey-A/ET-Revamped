@@ -12,7 +12,7 @@ try:
 except Exception as e:
     raise RuntimeError(f"Failed to load required configuration from config.json: {str(e)}")
 
-bedrock_cfg = config['Bedrock']
+_openai_cfg = config.get('OpenAI', {})
 
 
 class CoreAgentHandler:
@@ -36,8 +36,8 @@ class CoreAgentHandler:
         system_prompt = instruction_handler.core_agent_prompt.format(sentiment=query_sentiment, collection_name=collection_name)
 
         llm = llm_handler.get_llm(
-            model_id or bedrock_cfg['model_id'],
-            bedrock_cfg.get('temperature', 0.7),
+            model_id,
+            _openai_cfg.get('temperature', 0.7),
         )
 
         # Bind the collection_name server-side so the LLM can't call the tool
