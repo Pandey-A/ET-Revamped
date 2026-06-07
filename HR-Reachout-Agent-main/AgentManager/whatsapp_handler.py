@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import time
 import requests
 
 logger = logging.getLogger(__name__)
@@ -13,7 +15,8 @@ except Exception as e:
     logger.error(f"Failed to load WhatsApp config: {e}")
     WA_CONFIG = {}
 
-GRAPH_API_VERSION = "v22.0"
+# Typing indicators require Graph API v23.0+ (Meta docs).
+GRAPH_API_VERSION = (os.getenv("WHATSAPP_GRAPH_API_VERSION") or "v23.0").strip()
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 _SEND_RETRIES = 3
 _SEND_RETRY_DELAY_SEC = 1.5
@@ -29,42 +32,91 @@ class WhatsAppCloudAPI:
         self.access_token = access_token or WA_CONFIG.get("access_token")
         self.admin_phone = admin_phone or WA_CONFIG.get("admin_phone")
 
-    def send_typing_indicator(self, to: str, message_id: str = None) -> dict:
-        """Mark message read + typing_on (Meta Cloud API). Non-fatal if unsupported."""
-        if not self.phone_number_id or not self.access_token:
-            return {"status": "error", "error": "WhatsApp credentials missing"}
+    def mark_message_read(self, message_id: str) -> dict:
+        """Mark an inbound user message as read (no typing bubble)."""
+        if not self.phone_number_id or not self.access_token or not message_id:
+            return {"status": "skipped"}
         url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
-        to_digits = to.replace("+", "").replace(" ", "")
-        if message_id:
-            read_payload = {
-                "messaging_product": "whatsapp",
-                "status": "read",
-                "message_id": message_id,
-            }
-            try:
-                requests.post(url, headers=headers, json=read_payload, timeout=8)
-            except requests.exceptions.RequestException:
-                pass
         payload = {
             "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to_digits,
-            "sender_action": "typing_on",
+            "status": "read",
+            "message_id": message_id,
         }
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=10)
-            result = resp.json()
+            resp = requests.post(url, headers=headers, json=payload, timeout=8)
+            result = resp.json() if resp.text else {}
             if resp.status_code in (200, 201):
                 return {"status": "success", "response": result}
-            logger.warning(f"[WhatsApp] typing_on {resp.status_code}: {result}")
+            logger.error("[WhatsApp] mark read %s: %s", resp.status_code, result)
             return {"status": "error", "error": result}
         except requests.exceptions.RequestException as e:
-            logger.warning(f"[WhatsApp] typing_on failed: {e}")
+            logger.error("[WhatsApp] mark read failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    def send_typing_indicator(self, to: str = None, message_id: str = None) -> dict:
+        """
+        Show the typing bubble and mark the user's message as read.
+        Requires messages[].id from the inbound webhook (wamid…).
+        https://developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators/
+        """
+        del to  # recipient inferred from message_id; kept for call-site compatibility
+        if not self.phone_number_id or not self.access_token:
+            return {"status": "error", "error": "WhatsApp credentials missing"}
+        if not message_id:
+            logger.debug("[WhatsApp] typing skipped — no inbound message_id")
+            return {"status": "skipped", "reason": "message_id required for typing indicator"}
+
+        url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=8)
+            result = resp.json() if resp.text else {}
+            if resp.status_code in (200, 201):
+                logger.info("[WhatsApp] typing indicator sent for message %s", message_id[:24])
+                return {"status": "success", "response": result}
+            logger.error(
+                "[WhatsApp] typing indicator %s (API %s): %s",
+                resp.status_code,
+                GRAPH_API_VERSION,
+                result,
+            )
+            return {"status": "error", "error": result}
+        except requests.exceptions.RequestException as e:
+            logger.error("[WhatsApp] typing indicator request failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    def pause_with_typing(
+        self,
+        message_id: str | None,
+        seconds: float,
+        *,
+        refresh_interval: float = 18.0,
+    ) -> None:
+        """Keep typing visible for `seconds` (refreshes before Meta's 25s timeout)."""
+        if not message_id or seconds <= 0:
+            time.sleep(max(0, seconds))
+            return
+        self.send_typing_indicator(message_id=message_id)
+        remaining = seconds
+        while remaining > 0:
+            chunk = min(remaining, refresh_interval)
+            time.sleep(chunk)
+            remaining -= chunk
+            if remaining > 0:
+                self.send_typing_indicator(message_id=message_id)
 
     def _send_message(self, to: str, text: str) -> dict:
         """Send a text message via WhatsApp Cloud API."""
@@ -120,17 +172,139 @@ class WhatsAppCloudAPI:
                     continue
         return {"status": "error", "error": last_error}
 
+    def _post_payload(self, to: str, payload: dict) -> dict:
+        if not self.phone_number_id or not self.access_token:
+            return {"status": "error", "error": "WhatsApp credentials missing"}
+        url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {**payload, "messaging_product": "whatsapp", "to": to.replace("+", "").replace(" ", "")}
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            result = resp.json()
+            if resp.status_code in (200, 201):
+                return {"status": "success", "response": result}
+            logger.error(f"[WhatsApp] API error {resp.status_code}: {result}")
+            return {"status": "error", "error": result}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[WhatsApp] Request failed: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def send_image_message(self, to: str, image_url: str, caption: str = "") -> dict:
+        image_payload = {"link": image_url}
+        if caption:
+            image_payload["caption"] = caption[:1024]
+        return self._post_payload(to, {"type": "image", "image": image_payload})
+
+    @staticmethod
+    def _mime_for_path(file_path: str) -> str:
+        ext = os.path.splitext(file_path or "")[1].lower()
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
+        return mime_map.get(ext, "image/jpeg")
+
+    def upload_image_media(self, file_path: str) -> dict:
+        """Upload image to Meta once; returns {status, media_id} for reuse across recipients."""
+        if not self.phone_number_id or not self.access_token:
+            return {"status": "error", "error": "WhatsApp credentials missing"}
+        if not file_path or not os.path.isfile(file_path):
+            return {"status": "error", "error": f"Image file not found: {file_path}"}
+
+        mime = self._mime_for_path(file_path)
+        upload_url = f"{GRAPH_API_BASE}/{self.phone_number_id}/media"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        try:
+            with open(file_path, "rb") as img_file:
+                resp = requests.post(
+                    upload_url,
+                    headers=headers,
+                    data={"messaging_product": "whatsapp", "type": mime},
+                    files={"file": (os.path.basename(file_path), img_file, mime)},
+                    timeout=90,
+                )
+            upload_result = resp.json() if resp.text else {}
+            if resp.status_code not in (200, 201):
+                logger.error("[WhatsApp] media upload %s: %s", resp.status_code, upload_result)
+                return {"status": "error", "error": upload_result}
+            media_id = upload_result.get("id")
+            if not media_id:
+                return {"status": "error", "error": "No media id from upload"}
+            return {"status": "success", "media_id": media_id}
+        except requests.exceptions.RequestException as e:
+            logger.error("[WhatsApp] media upload failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    def send_image_by_media_id(self, to: str, media_id: str, caption: str = "") -> dict:
+        if not media_id:
+            return {"status": "error", "error": "media_id required"}
+        image_payload = {"id": media_id}
+        if caption:
+            image_payload["caption"] = caption[:1024]
+        return self._post_payload(to, {"type": "image", "image": image_payload})
+
+    def send_image_from_file(self, to: str, file_path: str, caption: str = "") -> dict:
+        """
+        Upload a local image to Meta, then send by media id.
+        Works without a public URL (ngrok) — preferred for welcome images.
+        """
+        uploaded = self.upload_image_media(file_path)
+        if uploaded.get("status") != "success":
+            return uploaded
+        return self.send_image_by_media_id(to, uploaded["media_id"], caption=caption)
+
+    def send_interactive_list(
+        self,
+        to: str,
+        *,
+        header: str,
+        body: str,
+        button_label: str,
+        rows: list,
+        section_title: str = "Services",
+    ) -> dict:
+        section_rows = []
+        for row in rows[:10]:
+            section_rows.append(
+                {
+                    "id": str(row.get("id") or "item")[:200],
+                    "title": str(row.get("title") or "Option")[:24],
+                    "description": str(row.get("description") or "")[:72],
+                }
+            )
+        interactive = {
+            "type": "list",
+            "header": {"type": "text", "text": header[:60]},
+            "body": {"text": body[:1024]},
+            "action": {
+                "button": button_label[:20],
+                "sections": [{"title": (section_title or "Services")[:24], "rows": section_rows}],
+            },
+        }
+        return self._post_payload(to, {"type": "interactive", "interactive": interactive})
+
     def send_whatsapp_message(
         self,
         to: str,
         text: str,
         access_token: str = None,
         phone_number_id: str = None,
+        *,
+        inbound_message_id: str | None = None,
+        typing_seconds: float = 1.2,
     ) -> dict:
         if access_token:
             self.access_token = access_token
         if phone_number_id:
             self.phone_number_id = phone_number_id
+        if inbound_message_id and typing_seconds > 0:
+            self.pause_with_typing(inbound_message_id, typing_seconds)
         return self._send_message(to, text)
 
     def send_lead_notification(

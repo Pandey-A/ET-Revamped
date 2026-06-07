@@ -118,6 +118,7 @@ export default function CreditsPage() {
               </div>
               <MetricCard label="WhatsApp messages" value={monitoring.total_whatsapp_messages} />
               <MetricCard label="Widget messages" value={monitoring.total_widget_messages} />
+              <MetricCard label="Est. LLM tokens" value={monitoring.total_tokens} />
             </section>
 
             <section className="mb-8">
@@ -134,6 +135,34 @@ export default function CreditsPage() {
                 </p>
               )}
             </section>
+
+            {monitoring.token_usage_per_session &&
+              Object.keys(monitoring.token_usage_per_session).length > 0 && (
+              <section className="mb-8">
+                <h2 className="mb-4 text-lg font-medium text-gray-900">Tokens by session</h2>
+                <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="border-b border-gray-100 bg-gray-50 text-xs uppercase text-gray-500">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Session</th>
+                        <th className="px-4 py-3 font-medium">Tokens</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(monitoring.token_usage_per_session)
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 20)
+                        .map(([sessionId, tokens]) => (
+                          <tr key={sessionId} className="border-b border-gray-50 last:border-0">
+                            <td className="px-4 py-3 font-mono text-xs text-gray-600">{sessionId}</td>
+                            <td className="px-4 py-3 text-gray-700">{tokens}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
 
             <section>
               <h2 className="mb-4 text-lg font-medium text-gray-900">Recent usage</h2>

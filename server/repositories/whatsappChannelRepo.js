@@ -8,18 +8,28 @@ function normalizeDigits(value) {
   return digits.length >= 8 ? digits : raw;
 }
 
-function mapRow(row) {
+function maskAccessToken(token) {
+  const t = String(token || '').trim();
+  if (!t) return '';
+  if (t.length <= 8) return '••••••••';
+  return `${t.slice(0, 4)}••••${t.slice(-4)}`;
+}
+
+function mapRow(row, { maskToken = false } = {}) {
   if (!row) return null;
+  const rawToken = row.access_token || '';
   return {
     id: row.id,
     owner_user_id: row.owner_user_id,
     whatsapp_business_account_id: row.whatsapp_business_account_id,
     phone_number_id: row.phone_number_id,
     display_phone_number: row.display_phone_number || '',
-    access_token: row.access_token || '',
+    access_token: maskToken ? maskAccessToken(rawToken) : rawToken,
+    access_token_set: Boolean(rawToken),
     ai_agent_id: row.ai_agent_id,
     ai_agent_name: row.ai_agent_name || '',
     admin_phone: row.admin_phone || '',
+    config_json: row.config_json && typeof row.config_json === 'object' ? row.config_json : {},
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -30,15 +40,15 @@ async function listByOwner(ownerUserId) {
     `SELECT * FROM whatsapp_channels WHERE owner_user_id = $1 ORDER BY created_at DESC`,
     [String(ownerUserId)]
   );
-  return rows.map(mapRow);
+  return rows.map((r) => mapRow(r, { maskToken: true }));
 }
 
-async function findByIdForOwner(id, ownerUserId) {
+async function findByIdForOwner(id, ownerUserId, { maskToken = true } = {}) {
   const { rows } = await query(
     `SELECT * FROM whatsapp_channels WHERE id = $1 AND owner_user_id = $2 LIMIT 1`,
     [String(id), String(ownerUserId)]
   );
-  return mapRow(rows[0]);
+  return mapRow(rows[0], { maskToken });
 }
 
 async function findDuplicateForCreate(wabaId, phoneNumberId) {
@@ -62,15 +72,21 @@ async function findDuplicateForUpdate(id, wabaId, phoneNumberId) {
   return mapRow(rows[0]);
 }
 
+function normalizeConfigJson(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value;
+}
+
 async function createChannel(ownerUserId, payload) {
   const id = `wa_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   const waba = normalizeDigits(payload.whatsapp_business_account_id);
   const phone = normalizeDigits(payload.phone_number_id);
+  const configJson = normalizeConfigJson(payload.config_json);
   const { rows } = await query(
     `INSERT INTO whatsapp_channels (
       id, owner_user_id, whatsapp_business_account_id, phone_number_id, display_phone_number,
-      access_token, ai_agent_id, ai_agent_name, admin_phone
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      access_token, ai_agent_id, ai_agent_name, admin_phone, config_json
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
     RETURNING *`,
     [
       id,
@@ -82,22 +98,31 @@ async function createChannel(ownerUserId, payload) {
       String(payload.ai_agent_id || '').trim(),
       String(payload.ai_agent_name || '').trim(),
       String(payload.admin_phone || '').trim(),
+      JSON.stringify(configJson),
     ]
   );
   return mapRow(rows[0]);
 }
 
 async function updateChannelForOwner(id, ownerUserId, payload) {
-  const current = await findByIdForOwner(id, ownerUserId);
+  const current = await findByIdForOwner(id, ownerUserId, { maskToken: false });
   if (!current) return null;
+  let accessToken = payload.access_token ?? current.access_token;
+  if (String(accessToken).includes('••••')) {
+    accessToken = current.access_token;
+  }
   const next = {
     whatsapp_business_account_id: payload.whatsapp_business_account_id ?? current.whatsapp_business_account_id,
     phone_number_id: payload.phone_number_id ?? current.phone_number_id,
     display_phone_number: payload.display_phone_number ?? current.display_phone_number,
-    access_token: payload.access_token ?? current.access_token,
+    access_token: accessToken,
     ai_agent_id: payload.ai_agent_id ?? current.ai_agent_id,
     ai_agent_name: payload.ai_agent_name ?? current.ai_agent_name,
     admin_phone: payload.admin_phone ?? current.admin_phone,
+    config_json:
+      payload.config_json !== undefined
+        ? normalizeConfigJson(payload.config_json)
+        : normalizeConfigJson(current.config_json),
   };
   const { rows } = await query(
     `UPDATE whatsapp_channels
@@ -108,6 +133,7 @@ async function updateChannelForOwner(id, ownerUserId, payload) {
          ai_agent_id = $7,
          ai_agent_name = $8,
          admin_phone = $9,
+         config_json = $10::jsonb,
          updated_at = now()
      WHERE id = $1 AND owner_user_id = $2
      RETURNING *`,
@@ -121,6 +147,7 @@ async function updateChannelForOwner(id, ownerUserId, payload) {
       String(next.ai_agent_id || '').trim(),
       String(next.ai_agent_name || '').trim(),
       String(next.admin_phone || '').trim(),
+      JSON.stringify(next.config_json),
     ]
   );
   return mapRow(rows[0]);
@@ -152,6 +179,11 @@ async function resolveForWebhook(wabaId, phoneNumberId) {
   return null;
 }
 
+async function listAllForInternal() {
+  const { rows } = await query(`SELECT * FROM whatsapp_channels ORDER BY created_at DESC`);
+  return rows.map((r) => mapRow(r, { maskToken: false }));
+}
+
 async function findFirstByAgentId(agentId) {
   const { rows } = await query(
     `SELECT * FROM whatsapp_channels WHERE ai_agent_id = $1 ORDER BY created_at DESC LIMIT 1`,
@@ -171,4 +203,5 @@ module.exports = {
   deleteByIdForOwner,
   resolveForWebhook,
   findFirstByAgentId,
+  listAllForInternal,
 };

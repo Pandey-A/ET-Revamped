@@ -6,10 +6,48 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { toast, ToastContainer } from "react-toastify";
 import { motion, AnimatePresence } from "framer-motion";
-import { fetchMyAgents } from "@/lib/api";
+import { fetchMyAgents, getApiBaseUrl } from "@/lib/api";
+import { getAuthHeaderObject } from "@/lib/authToken";
 import "react-toastify/dist/ReactToastify.css";
 
 const AI_AGENT_API = process.env.NEXT_PUBLIC_AI_AGENT_API_URL || "http://localhost:8000";
+
+function isPdfFile(file) {
+  if (!file) return false;
+  const name = String(file.name || "").toLowerCase();
+  if (name.endsWith(".pdf")) return true;
+  const t = String(file.type || "").toLowerCase();
+  return t === "application/pdf" || t === "application/x-pdf";
+}
+
+function resolveCollectionName(agent) {
+  if (!agent) return "";
+  if (agent.collection_name && String(agent.collection_name).trim()) {
+    return String(agent.collection_name).trim();
+  }
+  const safe = String(agent.name || "agent")
+    .trim()
+    .replace(/\s+/g, "_");
+  return `${safe}_${agent.id}`;
+}
+
+async function syncAgentToRuntime(agentId) {
+  if (!agentId) return;
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/agents/${encodeURIComponent(agentId)}/sync-runtime`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...getAuthHeaderObject() },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || `Sync failed (${res.status})`);
+    }
+  } catch (e) {
+    console.warn("Agent runtime sync:", e.message || e);
+    throw e;
+  }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getAgentFromStorage(id) {
@@ -73,14 +111,14 @@ function Dropzone({ onDrop, uploading, uploadStage }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter((f) => f.type === "application/pdf");
+    const files = Array.from(e.dataTransfer.files).filter(isPdfFile);
     if (files.length === 0) return toast.error("Only PDF files are accepted.");
     onDrop(files);
   };
 
   const handleFile = (e) => {
-    const files = Array.from(e.target.files).filter((f) => f.type === "application/pdf");
-    if (files.length === 0) return toast.error("Please select a PDF file.");
+    const files = Array.from(e.target.files).filter(isPdfFile);
+    if (files.length === 0) return toast.error("Please select a PDF file (.pdf).");
     onDrop(files);
     e.target.value = "";
   };
@@ -231,13 +269,26 @@ export default function ClientPage() {
   // ── Upload PDF
   const handlePdfDrop = useCallback(async (files) => {
     if (!agent) return;
+    const collectionName = resolveCollectionName(agent);
+    if (!collectionName || !agent.id) {
+      toast.error("Agent is missing collection name. Open the agent and save again, or sync runtime.");
+      return;
+    }
+
     setUploadingPdf(true);
+    setUploadStage("📤 Syncing agent to AI runtime…");
+    try {
+      await syncAgentToRuntime(agent.id);
+    } catch (e) {
+      toast.warn(`Runtime sync: ${e.message}. Trying upload anyway…`);
+    }
+
     setUploadStage("📤 Uploading file…");
     try {
       for (const file of files) {
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("collection_name", agent.collection_name);
+        formData.append("collection_name", collectionName);
         formData.append("agent_id", agent.id);
 
         setUploadStage("📤 Uploading file…");
@@ -245,8 +296,20 @@ export default function ClientPage() {
           method: "POST",
           body: formData,
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Upload failed");
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error(
+            res.status === 0
+              ? `Cannot reach AI server at ${AI_AGENT_API}. Is FastAPI running on port 8000?`
+              : "Upload failed (invalid response from server)."
+          );
+        }
+        if (!res.ok) {
+          const msg = data.error || data.detail || data.message || `Upload failed (${res.status})`;
+          throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+        }
 
         const resourceKey = `temp_files/${file.name}`;
 

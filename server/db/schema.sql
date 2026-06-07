@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS whatsapp_channels (
   ai_agent_id TEXT NOT NULL REFERENCES ai_agents (id) ON DELETE CASCADE,
   ai_agent_name TEXT NOT NULL DEFAULT '',
   admin_phone TEXT NOT NULL DEFAULT '',
+  config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

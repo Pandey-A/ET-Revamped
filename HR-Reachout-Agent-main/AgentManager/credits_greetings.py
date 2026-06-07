@@ -37,7 +37,7 @@ def load_greetings(filepath: str | None = None) -> None:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         candidates = [
             os.path.join(base, "data", "GREETING_DATA.csv"),
-            os.path.join(base, "..", "chattiq-wp-credits", "GREETING_DATA.csv"),
+            os.path.join(base, "..", "chattiq-wp-credits-new", "GREETING_DATA.csv"),
             os.path.join(base, "GREETING_DATA.csv"),
         ]
         for path in candidates:

@@ -1,5 +1,5 @@
 """
-Credit billing + usage metrics (Redis). Ported from chattiq-wp-credits with chattiq: key namespace.
+Credit billing + usage metrics (Redis). Integrated from chattiq-wp-credits-new with chattiq: key namespace.
 Account user_id = platform user (agent owner), not end-customer phone.
 """
 from __future__ import annotations
@@ -127,6 +127,29 @@ def record_user_metric(user_id: str, field: str, amount: int = 1) -> None:
     client.hset(key, "last_active_at", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
 
 
+def record_token_usage(user_id: str, session_id: str, tokens: int) -> None:
+    """Per-session LLM token totals (from chattiq-wp-credits-new)."""
+    if not user_id or not session_id or tokens <= 0:
+        return
+    client = _redis_client()
+    key = f"chattiq:tokens:{user_id}"
+    client.hincrby(key, session_id, tokens)
+    client.hincrby(f"chattiq:metrics:{user_id}", "total_tokens", tokens)
+
+
+def get_token_usage_per_session(user_id: str) -> Dict[str, int]:
+    client = _redis_client()
+    key = f"chattiq:tokens:{user_id}"
+    data = client.hgetall(key)
+    return {k: int(v) for k, v in data.items()}
+
+
+def estimate_tokens(*texts: str) -> int:
+    """Rough token estimate when provider usage metadata is unavailable."""
+    chars = sum(len(t or "") for t in texts)
+    return max(1, chars // 4) if chars else 0
+
+
 def log_usage_event(
     user_id: str,
     channel: str,
@@ -244,6 +267,7 @@ def get_user_billing_and_monitoring(user_id: str) -> dict:
 
     metrics_key = f"chattiq:metrics:{user_id}"
     data = client.hgetall(metrics_key)
+    session_tokens = get_token_usage_per_session(user_id)
 
     return {
         "user_id": user_id,
@@ -262,7 +286,9 @@ def get_user_billing_and_monitoring(user_id: str) -> dict:
             "total_failed_replies": int(data.get("total_failed_replies", 0)),
             "total_widget_messages": int(data.get("total_widget_messages", 0)),
             "total_whatsapp_messages": int(data.get("total_whatsapp_messages", 0)),
+            "total_tokens": int(data.get("total_tokens", 0)),
             "last_active_at": data.get("last_active_at"),
+            "token_usage_per_session": session_tokens,
         },
         "recent_usage": get_usage_log(user_id, 30),
     }

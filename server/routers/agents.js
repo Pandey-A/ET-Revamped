@@ -134,6 +134,27 @@ router.post('/internal/agents/:id/resources', async (req, res) => {
   }
 });
 
+router.put('/internal/agents/:id/resources', async (req, res) => {
+  try {
+    if (!internalAllowed(req)) {
+      return res.status(401).json({ success: false, message: 'Unauthorised internal request' });
+    }
+    const agentId = String(req.params.id || '').trim();
+    const resourceList = req.body?.resource_list;
+    if (!agentId || !Array.isArray(resourceList)) {
+      return res.status(400).json({ success: false, message: 'agent id and resource_list array are required' });
+    }
+    const agent = await aiAgentRepo.setResourceListByAgentId(agentId, resourceList);
+    if (!agent) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+    return res.json({ success: true, agent });
+  } catch (e) {
+    console.error('set internal resources', e);
+    return res.status(500).json({ success: false, message: 'Failed to set resources' });
+  }
+});
+
 router.get('/agents', authMiddleware, async (req, res) => {
   try {
     const list = await aiAgentRepo.listByOwner(req.user.id);

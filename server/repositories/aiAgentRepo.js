@@ -186,6 +186,16 @@ async function appendResourceByAgentId(agentId, resourcePath) {
   return findById(agentId);
 }
 
+async function setResourceListByAgentId(agentId, resourceList) {
+  const list = Array.isArray(resourceList) ? resourceList.map(String) : [];
+  const { rowCount } = await query(
+    `UPDATE ai_agents SET resource_list = $2::jsonb, updated_at = now() WHERE id = $1`,
+    [String(agentId), JSON.stringify(list)]
+  );
+  if (!rowCount) return null;
+  return findById(agentId);
+}
+
 module.exports = {
   listByOwner,
   findByIdForOwner,
@@ -196,5 +206,6 @@ module.exports = {
   upsertWidgetPreset,
   getWidgetPreset,
   appendResourceByAgentId,
+  setResourceListByAgentId,
   mapAgentRow,
 };

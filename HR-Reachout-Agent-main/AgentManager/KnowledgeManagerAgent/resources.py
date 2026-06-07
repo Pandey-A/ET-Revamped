@@ -17,16 +17,23 @@ def _load_config(path='AgentManager/config.json'):
         return json.load(f)
 
 
+def _weaviate_settings(config):
+    """Env overrides config.json — use WEAVIATE_URL in production without editing files."""
+    wc = config.get('weaviate') or {}
+    url = (os.getenv('WEAVIATE_URL') or wc.get('url') or 'http://localhost:8080').strip()
+    api_key = os.getenv('WEAVIATE_API_KEY') or wc.get('api_key')
+    grpc_port = int(os.getenv('WEAVIATE_GRPC_PORT') or wc.get('grpc_port') or 50051)
+    return url, api_key, grpc_port
+
+
 def _connect_weaviate(config):
-    """Connect to self-hosted Weaviate on EC2 (HTTP) or Weaviate Cloud (HTTPS)."""
-    weaviate_url = config['weaviate']['url']          # e.g. http://<EC2-IP>:8080
-    weaviate_api_key = config['weaviate'].get('api_key', None)
+    """Connect to local Docker Weaviate, self-hosted EC2 (HTTP), or Weaviate Cloud (HTTPS)."""
+    weaviate_url, weaviate_api_key, grpc_port = _weaviate_settings(config)
 
     # Self-hosted on EC2 — use connect_to_custom
     if weaviate_url.startswith("http://") or "localhost" in weaviate_url:
         host = weaviate_url.replace("http://", "").replace("https://", "").split(":")[0]
         port = int(weaviate_url.split(":")[-1]) if ":" in weaviate_url.replace("http://", "") else 8080
-        grpc_port = config['weaviate'].get('grpc_port', 50051)
         client = weaviate.connect_to_custom(
             http_host=host,
             http_port=port,
@@ -174,6 +181,42 @@ class PDFIndexer:
         finally:
             if self.weaviate_client:
                 self.weaviate_client.close()
+
+
+def clear_weaviate_collection(collection_name: str, config_path: str = "AgentManager/config.json") -> bool:
+    """Delete all vectors for an agent collection so it can be rebuilt from one PDF."""
+    config = _load_config(config_path)
+    client = _connect_weaviate(config)
+    weaviate_class = _to_weaviate_class(collection_name)
+    try:
+        if client.collections.exists(weaviate_class):
+            client.collections.delete(weaviate_class)
+            print(f"[KB] Deleted Weaviate collection '{weaviate_class}'")
+            return True
+        print(f"[KB] Collection '{weaviate_class}' did not exist (nothing to delete)")
+        return False
+    finally:
+        client.close()
+
+
+def rebuild_pdf_knowledge_base(
+    pdf_path: str,
+    collection_name: str,
+    *,
+    clear_existing: bool = True,
+    config_path: str = "AgentManager/config.json",
+) -> None:
+    """Replace Weaviate index for `collection_name` with a single PDF."""
+    if clear_existing:
+        clear_weaviate_collection(collection_name, config_path)
+    if not os.path.isfile(pdf_path):
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+    indexer = PDFIndexer(config_path)
+    try:
+        indexer.index_pdf_url_to_qdrant(pdf_path, collection_name)
+    finally:
+        if indexer.weaviate_client:
+            indexer.weaviate_client.close()
 
 
 def _to_weaviate_class(collection_name: str) -> str:

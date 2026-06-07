@@ -61,7 +61,12 @@ def call_llm_rag(context: str, query: str, provider: str = None) -> dict:
         response.raise_for_status()
         data = response.json()
         content_str = data["choices"][0]["message"]["content"]
-        return json.loads(content_str)
+        result = json.loads(content_str)
+        if "usage" in data and "total_tokens" in data["usage"]:
+            result["tokens_used"] = data["usage"]["total_tokens"]
+        else:
+            result["tokens_used"] = 0
+        return result
         
     else:
         if gemini_client is None:
@@ -76,4 +81,6 @@ def call_llm_rag(context: str, query: str, provider: str = None) -> dict:
                 temperature=0.1,
             ),
         )
-        return json.loads(response.text)
+        result = json.loads(response.text)
+        result["tokens_used"] = response.usage_metadata.total_token_count if response.usage_metadata else 0
+        return result

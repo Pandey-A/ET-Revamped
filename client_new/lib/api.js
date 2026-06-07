@@ -22,12 +22,12 @@ function tryParseUrl(raw) {
  */
 function resolveApiBaseUrl() {
   if (typeof window === 'undefined') {
-    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
   }
 
   const { protocol, hostname } = window.location;
   const pageHost = hostname.toLowerCase();
-  const defaultPort = process.env.NEXT_PUBLIC_API_PORT || '5000';
+  const defaultPort = process.env.NEXT_PUBLIC_API_PORT || '5001';
 
   if (process.env.NEXT_PUBLIC_API_URL_LOCAL) {
     return process.env.NEXT_PUBLIC_API_URL_LOCAL.replace(/\/$/, '');

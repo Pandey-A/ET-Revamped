@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from src.redis_store import get_user_billing_and_monitoring
+from src.redis_store import get_user_billing_and_monitoring, get_token_usage_per_session
 
 app = FastAPI(title="WhatsApp Credits API")
 
@@ -18,6 +18,13 @@ app.add_middleware(
 async def get_credits(user_id: str = Query(..., description="The user's phone number or user ID")):
     try:
         return get_user_billing_and_monitoring(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/tokens")
+async def get_tokens(user_id: str = Query(..., description="The user's phone number or user ID")):
+    try:
+        return get_token_usage_per_session(user_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

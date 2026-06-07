@@ -1,6 +1,31 @@
 version: "3.8"
 
+# Local dev: docker compose up -d weaviate redis
+# Production: set WEAVIATE_URL to remote host in .env (overrides config.json)
+
 services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.5
+    container_name: hr_agent_weaviate
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      ENABLE_MODULES: ""
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   redis:
     image: redis:7-alpine
     container_name: hr_agent_redis
@@ -24,8 +49,15 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379
+      # Inside Docker, Weaviate is the service hostname (not localhost).
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_GRPC_PORT=50051
     volumes:
       - ./temp_files:/app/temp_files
       - ./Agents_store.json:/app/Agents_store.json
@@ -36,4 +68,6 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  weaviate_data:
     driver: local

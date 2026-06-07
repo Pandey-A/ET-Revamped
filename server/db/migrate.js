@@ -10,11 +10,26 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { getPool } = require('./pool');
 
 async function runMigrations() {
+  const pool = getPool();
   const sqlPath = path.join(__dirname, 'schema.sql');
   const sql = fs.readFileSync(sqlPath, 'utf8');
-  const pool = getPool();
   await pool.query(sql);
   console.log('PostgreSQL schema applied:', sqlPath);
+
+  const migrationsDir = path.join(__dirname, 'migrations');
+  if (fs.existsSync(migrationsDir)) {
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    for (const file of files) {
+      const migPath = path.join(migrationsDir, file);
+      const migSql = fs.readFileSync(migPath, 'utf8');
+      await pool.query(migSql);
+      console.log('Migration applied:', migPath);
+    }
+  }
+
   await pool.end();
 }
 

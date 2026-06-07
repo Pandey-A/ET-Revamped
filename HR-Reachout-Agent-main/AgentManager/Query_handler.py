@@ -15,7 +15,7 @@ from AgentManager import (
 )
 from AgentManager.MonitoringAgent import hybrid_monitoring_agent
 from AgentManager.ActionAgent import action_agent_handler
-from AgentManager.CoreAgent import core_agent
+from AgentManager.CoreAgent import core_agent, extract_agent_reply
 from AgentManager.KnowledgeManagerAgent import knowledge_management_handler
 
 _OUT_OF_SCOPE_TEMPLATE = (
@@ -85,6 +85,11 @@ class QueryHandler:
             return False
 
     # === ADD: start helper methods (paste these right after send_session_to_webhook) ===
+    def _normalize_collection_name(self, name: str) -> str:
+        """Match Weaviate class naming (spaces/hyphens -> underscores)."""
+        clean = (name or "").strip().replace("-", "_").replace(" ", "_")
+        return clean or "default_collection"
+
     def _get_collection_from_store(self, agent_id: Optional[str]) -> str:
         """Fetch collection_name from Agents_store.json for given agent_id"""
         try:
@@ -92,7 +97,9 @@ class QueryHandler:
                 agents = json.load(f)
             for a in agents:
                 if a.get("id") == agent_id:
-                    collection = a.get("collection_name", "default_collection")
+                    collection = self._normalize_collection_name(
+                        a.get("collection_name", "default_collection")
+                    )
                     self.logger.info(f"[AgentConfig] collection for agent_id={agent_id} -> {collection}")
                     return collection
             # not found -> fallback
@@ -219,7 +226,11 @@ class QueryHandler:
         agent = self._get_agent_record(agent_id)
         email = self._contact_email_for_channel(agent, channel)
         if not email:
-            return self._out_of_scope_reply(company_name)
+            return (
+                f"I don't have that specific detail in my knowledge base right now. "
+                f"Please ask me another question about {company_name}, or visit our website "
+                f"for contact details."
+            )
         if channel == "whatsapp":
             return (
                 "Sorry, I can't answer that. We will transfer your query to our agent on WhatsApp. "
@@ -296,8 +307,6 @@ class QueryHandler:
     def _kb_hit_from_rag(self, rag_result: Dict[str, Any]) -> bool:
         sol = rag_result.get("solution")
         if isinstance(sol, dict):
-            if sol.get("weak_match"):
-                return False
             chunk = (sol.get("chunk") or "").strip()
             return bool(chunk)
         return False
@@ -315,7 +324,7 @@ class QueryHandler:
 
     def _kb_chunk_from_rag(self, rag_result: Dict[str, Any]) -> str:
         sol = rag_result.get("solution")
-        if isinstance(sol, dict) and not sol.get("weak_match"):
+        if isinstance(sol, dict):
             return (sol.get("chunk") or "").strip()
         return ""
 
@@ -385,7 +394,10 @@ class QueryHandler:
             "sunrise",
             "sunset",
         )
-        return any(self._query_contains_term(q, m) if len(m) <= 6 else m in q for m in markers)
+        return any(self._query_contains_term(q, m) for m in markers)
+
+    def _is_whatsapp_session(self, session_id: str) -> bool:
+        return (session_id or "").startswith("whatsapp_")
 
     def _gate_query(
         self,
@@ -398,22 +410,25 @@ class QueryHandler:
         session_id: str = "",
     ) -> Dict[str, Any]:
         """
-        KB-only gate: LLM runs only for brief social messages or when RAG returns a real chunk.
-        General-knowledge / unrelated questions never reach the model.
+        KB-only gate: block unrelated trivia; allow company questions through to the agent
+        (ReAct can call knowledge_source) especially on WhatsApp.
         """
         if is_social:
             return {"allow": True, "kb_context": None}
 
-        if self._is_likely_general_knowledge_query(user_input):
+        company_q = self._is_company_related_query(user_input, company_name)
+        business_q = self._is_likely_business_query(user_input)
+
+        if self._is_likely_general_knowledge_query(user_input) and not (company_q or business_q):
             return {"allow": False, "message": self._out_of_scope_reply(company_name)}
 
         kb_context = self._kb_chunk_from_rag(rag_result)
         if kb_context:
             return {"allow": True, "kb_context": kb_context}
 
-        if self._is_company_related_query(
-            user_input, company_name
-        ) or self._is_likely_business_query(user_input):
+        if company_q or business_q:
+            if self._is_whatsapp_session(session_id):
+                return {"allow": True, "kb_context": None}
             return {
                 "allow": False,
                 "message": self._company_kb_miss_reply(agent_id, session_id, company_name),
@@ -472,6 +487,27 @@ class QueryHandler:
             "proposal",
             "rfp",
             "sow",
+            "location",
+            "located",
+            "address",
+            "directions",
+            "where are you",
+            "where is",
+            "how to reach",
+            "near",
+            "timings",
+            "timing",
+            "hours",
+            "open",
+            "contact",
+            "phone",
+            "call",
+            "email",
+            "gym",
+            "fitness",
+            "membership",
+            "trainer",
+            "bca",
         )
         return any(self._query_contains_term(q, m) for m in markers)
 
@@ -538,7 +574,11 @@ class QueryHandler:
         session_id: str = "",
     ) -> str:
         if user_input and self._is_likely_general_knowledge_query(user_input):
-            return self._out_of_scope_reply(company_name)
+            if not (
+                self._is_company_related_query(user_input, company_name)
+                or self._is_likely_business_query(user_input)
+            ):
+                return self._out_of_scope_reply(company_name)
 
         kb_miss = self._company_kb_miss_reply(agent_id, session_id, company_name)
 
@@ -567,18 +607,16 @@ class QueryHandler:
             if "assistant" in role:
                 last_assistant = (getattr(msg, "content", "") or "").strip()
                 break
-        if last_assistant and last_assistant == text:
-            return kb_miss
+        if last_assistant and last_assistant == text and user_input:
+            ui = (user_input or "").strip().lower()
+            if not ui.startswith("tell me about"):
+                return kb_miss
         return text
     # === ADD: end helper methods ===
 
     @staticmethod
     def _extract_chat_text(chat_response: Any) -> str:
-        if chat_response is None:
-            return ""
-        if hasattr(chat_response, "response") and chat_response.response is not None:
-            return str(chat_response.response)
-        return str(chat_response)
+        return extract_agent_reply(chat_response)
 
     async def _non_streaming_async_gen(self, text: str) -> AsyncIterator[str]:
         if text:
@@ -627,7 +665,7 @@ class QueryHandler:
             chat_history = self._sanitize_chat_history(chat_history)
             
             if not user_input.strip():
-                return {'response': 'Please provide a valid query'}
+                return self._non_streaming_async_gen("Please provide a valid query")
 
             collection_name = self._get_collection_from_store(agent_id)
             company_name = self._get_company_name_from_store(agent_id)
@@ -664,8 +702,14 @@ class QueryHandler:
                 content += self._kb_context_instruction(
                     kb_context, company_name, agent_id, session_id
                 )
-            
-            is_whatsapp = session_id.startswith("whatsapp_")
+            elif self._is_whatsapp_session(session_id):
+                content += (
+                    "\n\nWHATSAPP: The user message may be a service menu label "
+                    "(e.g. 'Membership Plans'). Always call knowledge_source with a clear "
+                    "question about that topic, then answer from the returned facts only.\n"
+                )
+
+            is_whatsapp = self._is_whatsapp_session(session_id)
             inject_widget_lead = self._is_widget_channel_session(session_id)
             inject_whatsapp_lead = is_whatsapp and self._agent_has_whatsapp_escalation(agent_id)
 
@@ -682,22 +726,12 @@ class QueryHandler:
                 monitoring_result.get("sentiment_analysis", {}),
                 collection_name=collection_name,
                 model_id=model_id,
+                extra_system_prompt=content,
             )
-            
-            chat_history += [ChatMessage(role="system", content=content)]
 
-            def run_chat():
-                try:
-                    return agent.chat(user_input, chat_history)
-                except ValueError as exc:
-                    if "max iterations" in str(exc).lower():
-                        self.logger.warning(
-                            "ReAct agent hit max iterations for session %s", session_id
-                        )
-                        return None
-                    raise
-
-            chat_response = await asyncio.to_thread(run_chat)
+            chat_response = await asyncio.to_thread(
+                core_agent.run_agent_sync, agent, user_input
+            )
             if chat_response is None:
                 return self._non_streaming_async_gen(
                     "I'm having trouble completing that request. Please try rephrasing your question."
@@ -713,12 +747,16 @@ class QueryHandler:
                 agent_id=agent_id,
                 session_id=session_id,
             )
+            if not (reply or "").strip():
+                reply = self._company_kb_miss_reply(agent_id, session_id, company_name)
             return self._non_streaming_async_gen(reply)
 
         except Exception as e:
             error_msg = f"Error processing query: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
-            raise e
+            return self._non_streaming_async_gen(
+                "Sorry, something went wrong while preparing your answer. Please try again."
+            )
 
     def process_query(self,
                       user_input: str,
@@ -744,7 +782,7 @@ class QueryHandler:
             chat_history = self._sanitize_chat_history(chat_history)
             
             if not user_input.strip():
-                return {'response': 'Please provide a valid query'}
+                return self._non_streaming_async_gen("Please provide a valid query")
 
             collection_name = self._get_collection_from_store(agent_id)
             company_name = self._get_company_name_from_store(agent_id)
@@ -797,11 +835,9 @@ class QueryHandler:
                 monitoring_result.get("sentiment_analysis", {}),
                 collection_name=collection_name,
                 model_id=model_id,
+                extra_system_prompt=content,
             )
-            print(f"printing chat history: {chat_history}")
-            
-            chat_history += [ChatMessage(role="system", content=content)]
-            chat_response = agent.chat(user_input, chat_history)
+            chat_response = core_agent.run_agent_sync(agent, user_input)
             reply = self._enforce_reply_policy(
                 self._extract_chat_text(chat_response),
                 company_name,

@@ -47,4 +47,24 @@ router.get('/credits/me', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/credits/tokens', authMiddleware, async (req, res) => {
+  try {
+    if (!FASTAPI_BASE) {
+      return res.status(503).json({ error: 'AI_AGENT_API_URL is not configured' });
+    }
+    const userId = req.user.id;
+    const url = `${FASTAPI_BASE}/credits/tokens?user_id=${encodeURIComponent(userId)}`;
+    const r = await fetch(url);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({
+        error: data.detail || data.error || `FastAPI responded ${r.status}`,
+      });
+    }
+    return res.json({ user_id: userId, token_usage_per_session: data });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'Failed to load token usage' });
+  }
+});
+
 module.exports = router;

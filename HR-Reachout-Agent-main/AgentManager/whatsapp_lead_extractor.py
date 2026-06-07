@@ -108,14 +108,18 @@ def extract_and_save_lead(
         
         prompt = (
             "Analyze the following conversation history.\n"
-            "Extract the user's name and email if both have been explicitly provided by the user.\n"
-            "If BOTH name and email are present, generate a 3-4 bullet point summary of the user's needs or questions.\n"
-            "If either name or email is missing, return status as 'incomplete'.\n\n"
+            "Extract contact details the user explicitly provided.\n"
+            "Mark complete if EITHER:\n"
+            "  (a) both name AND email are present, OR\n"
+            "  (b) name AND phone number are present (WhatsApp users often skip email).\n"
+            "If complete, generate a 3-4 bullet point summary of the user's needs or questions.\n"
+            "Otherwise return status incomplete.\n\n"
             "RESPOND STRICTLY IN JSON FORMAT ONLY (no markdown blocks, just raw JSON):\n"
             "{\n"
             '  "status": "complete" or "incomplete",\n'
             '  "name": "extracted name",\n'
-            '  "email": "extracted email",\n'
+            '  "email": "extracted email or empty string",\n'
+            '  "phone": "extracted phone if mentioned",\n'
             '  "summary": "bullet point summary..."\n'
             "}\n\n"
             f"Conversation History:\n{chat_history}"
@@ -130,20 +134,50 @@ def extract_and_save_lead(
             
         data = json.loads(content)
         
-        if data.get("status") == "complete" and data.get("name") and data.get("email"):
-            # Prepare payload
+        has_email = bool(data.get("email"))
+        has_phone = bool(data.get("phone") or phone)
+        if (
+            data.get("status") == "complete"
+            and data.get("name")
+            and (has_email or has_phone)
+        ):
             lead_data = {
                 "Timestamp": datetime.utcnow().isoformat(),
                 "Session_ID": session_id,
-                "Phone": phone,
+                "Phone": data.get("phone") or phone,
                 "Name": data.get("name"),
-                "Email": data.get("email"),
-                "Summary": data.get("summary")
+                "Email": data.get("email") or "",
+                "Summary": data.get("summary"),
             }
             
             # Save and Send
             _save_to_excel(lead_data)
             _send_to_webhook(lead_data, agent_id)
+            try:
+                leads_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "leads_store.json")
+                leads = []
+                if os.path.exists(leads_path):
+                    with open(leads_path, "r", encoding="utf-8") as f:
+                        leads = json.load(f)
+                if not isinstance(leads, list):
+                    leads = []
+                leads.append(
+                    {
+                        "session_id": session_id,
+                        "name": lead_data["Name"],
+                        "email": lead_data["Email"],
+                        "phone": lead_data["Phone"],
+                        "summary": lead_data["Summary"],
+                        "captured_at": lead_data["Timestamp"],
+                        "whatsapp_sent": False,
+                        "source": "WhatsApp Chat",
+                        "agent_id": agent_id or "",
+                    }
+                )
+                with open(leads_path, "w", encoding="utf-8") as f:
+                    json.dump(leads, f, indent=2)
+            except Exception as store_err:
+                logger.error("Failed to sync lead to leads_store: %s", store_err)
             # Disabled by product requirement:
             # never send chat summaries to any WhatsApp number.
             

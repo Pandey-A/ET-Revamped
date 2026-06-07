@@ -13,12 +13,13 @@ import uvicorn
 import asyncio
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Any, Dict
 from fastapi import UploadFile, File, Form, APIRouter
 from fastapi.staticfiles import StaticFiles
 import os
 import re
+import time
 import requests
 
 from managers.user_ws_manager import UserWebSocketManager
@@ -43,12 +44,36 @@ from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
 from AgentManager import widget_session_manager as wsm
 from AgentManager import credits_store
 from AgentManager.credits_greetings import greeting_reply
+from AgentManager import whatsapp_flow
+from AgentManager import whatsapp_booking
+from AgentManager import whatsapp_broadcast
 
 TICKETS_DB = "tickets_store.json"
 AGENTS_DB = "Agents_store.json"
 LEADS_DB = "leads_store.json"
-CORE_API_BASE = (os.getenv("CORE_API_URL") or "http://127.0.0.1:8002/api").strip().rstrip("/")
+CORE_API_BASE = (os.getenv("CORE_API_URL") or "http://127.0.0.1:5001/api").strip().rstrip("/")
 CORE_INTERNAL_API_KEY = (os.getenv("INTERNAL_API_KEY") or "").strip()
+WHATSAPP_VERIFY_TOKEN = (os.getenv("WHATSAPP_VERIFY_TOKEN") or "12345").strip()
+WHATSAPP_APP_SECRET = (os.getenv("WHATSAPP_APP_SECRET") or "").strip()
+
+# Meta may retry webhooks — ignore duplicate inbound message ids.
+_WHATSAPP_SEEN_MSG_IDS: Dict[str, float] = {}
+_WHATSAPP_DEDUPE_TTL_SEC = 3600
+
+
+def _whatsapp_message_already_handled(message_id: str | None) -> bool:
+    if not message_id:
+        return False
+    now = time.time()
+    expired = [k for k, ts in _WHATSAPP_SEEN_MSG_IDS.items() if now - ts > _WHATSAPP_DEDUPE_TTL_SEC]
+    for k in expired:
+        _WHATSAPP_SEEN_MSG_IDS.pop(k, None)
+    if message_id in _WHATSAPP_SEEN_MSG_IDS:
+        logging.info("[WhatsApp] Duplicate webhook ignored: %s", message_id[:24])
+        return True
+    _WHATSAPP_SEEN_MSG_IDS[message_id] = now
+    return False
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("TELEGRAM_WEBHOOK_BASE_URL") or "").strip().rstrip("/")
 
 # ─── Indexing Status Tracker ──────────────────────────────────────────────────
 # Tracks background indexing tasks so frontend can poll for completion
@@ -230,6 +255,20 @@ async def create_or_get_session():
 
 # ─── WhatsApp Webhook ─────────────────────────────────────────────────────────
 
+def _verify_whatsapp_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
+    if not WHATSAPP_APP_SECRET:
+        return True
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    import hmac
+    import hashlib
+
+    expected = "sha256=" + hmac.new(
+        WHATSAPP_APP_SECRET.encode("utf-8"), raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature_header.strip())
+
+
 @app.get("/webhook/whatsapp")
 async def verify_whatsapp_webhook(request: Request):
     """Verify webhook from Meta"""
@@ -237,9 +276,7 @@ async def verify_whatsapp_webhook(request: Request):
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
 
-    VERIFY_TOKEN = "12345"
-
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
         return int(hub_challenge)
     return JSONResponse(status_code=403, content={"error": "Verification failed"})
 
@@ -248,6 +285,127 @@ def _billing_user_for_agent(agent_id: Optional[str]) -> Optional[str]:
     if not agent_id:
         return None
     return credits_store.get_agent_owner(agent_id)
+
+
+async def _collect_ai_response(response_gen) -> str:
+    """Normalize aprocess_query return value (async gen, dict, or str) into plain text."""
+    if response_gen is None:
+        return ""
+    if isinstance(response_gen, dict):
+        return str(response_gen.get("response") or response_gen.get("message") or "")
+    if isinstance(response_gen, str):
+        return response_gen
+    full = ""
+    if hasattr(response_gen, "__aiter__"):
+        async for chunk in response_gen:
+            if chunk is not None:
+                full += str(chunk)
+        return full
+    return str(response_gen)
+
+
+async def _whatsapp_send_ai_reply(
+    *,
+    session_id: str,
+    to_phone: str,
+    phone: str,
+    user_text: str,
+    agent_id: str,
+    dynamic_api: WhatsAppCloudAPI,
+    inbound_message_id: str | None,
+    channel_config: Dict[str, Any],
+    billing_user: str | None,
+) -> None:
+    """Run KB+RAG+LLM and send the reply on WhatsApp."""
+    charge_type = None
+    if billing_user:
+        if not credits_store.can_accept_message(billing_user):
+            dynamic_api.send_whatsapp_message(
+                to_phone,
+                "Your account is out of message credits. Please contact support to add more credits.",
+            )
+            return
+        charge_type = credits_store.deduct_user_charge(billing_user, 1)
+
+    if inbound_message_id:
+        dynamic_api.send_typing_indicator(message_id=inbound_message_id)
+        await asyncio.sleep(1.0)
+
+    async def _refresh_typing_loop():
+        while True:
+            await asyncio.sleep(18)
+            if inbound_message_id:
+                dynamic_api.send_typing_indicator(message_id=inbound_message_id)
+
+    typing_task = None
+    if inbound_message_id:
+        typing_task = asyncio.create_task(_refresh_typing_loop())
+
+    full_response = ""
+    try:
+        response_gen = await query_handler.aprocess_query(user_text, session_id, agent_id)
+        full_response = await _collect_ai_response(response_gen)
+    except Exception as exc:
+        logging.error("[WhatsApp] AI reply failed for session %s: %s", session_id, exc, exc_info=True)
+        full_response = ""
+    finally:
+        if typing_task:
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+
+    if not full_response.strip():
+        full_response = (
+            "Sorry, I couldn't generate a reply just now. Please try again or reply *menu*."
+        )
+
+    agent_config = _get_agent_config(agent_id)
+    greeting_message = (agent_config.get("greeting_message") or "").strip()
+    if greeting_message and _should_prefix_greeting(session_id, user_text):
+        full_response = f"{greeting_message}\n\n{full_response}"
+
+    chat_history_handler.add_message(session_id, "assistant", full_response)
+    mapped_phone_number_id = channel_config.get("phone_number_id")
+    if not full_response.strip():
+        logging.error("[WhatsApp] Refusing to send empty message for session %s", session_id)
+        return
+    if inbound_message_id:
+        dynamic_api.pause_with_typing(inbound_message_id, 0.8)
+    send_result = dynamic_api.send_whatsapp_message(to_phone, full_response)
+    if send_result.get("status") != "success":
+        logging.error(
+            f"[WhatsApp] Outbound reply failed for session {session_id}: {send_result.get('error')}"
+        )
+        if billing_user and charge_type:
+            credits_store.refund_user_charge(billing_user, charge_type, 1)
+            charge_type = None
+    elif billing_user:
+        credits_store.record_user_metric(billing_user, "total_successful_replies")
+        if charge_type:
+            credits_store.log_usage_event(
+                billing_user,
+                "whatsapp",
+                charge_type or "credit",
+                1,
+                session_id,
+                agent_id or "",
+            )
+            credits_store.record_token_usage(
+                billing_user,
+                session_id,
+                credits_store.estimate_tokens(user_text, full_response),
+            )
+
+    extract_and_save_lead(
+        session_id,
+        phone,
+        agent_id,
+        admin_phone=channel_config.get("admin_phone"),
+        access_token=channel_config.get("access_token"),
+        phone_number_id=mapped_phone_number_id,
+    )
 
 
 async def async_process_whatsapp(
@@ -259,7 +417,6 @@ async def async_process_whatsapp(
     display_phone_number: str = None,
     inbound_message_id: str = None,
 ):
-    charge_type = None
     billing_user = None
     dynamic_api = None
     to_phone = "+" + str(phone).replace("+", "").replace(" ", "")
@@ -296,7 +453,6 @@ async def async_process_whatsapp(
             access_token=access_token,
             admin_phone=admin_phone,
         )
-        dynamic_api.send_typing_indicator(to_phone, message_id=inbound_message_id)
 
         billing_user = _billing_user_for_agent(agent_id)
         if billing_user:
@@ -304,92 +460,275 @@ async def async_process_whatsapp(
             credits_store.record_user_metric(billing_user, "total_queries_received")
             credits_store.record_user_metric(billing_user, "total_whatsapp_messages")
 
+        wa_cfg = whatsapp_flow.parse_channel_config(channel_config)
+
+        normalized = (text or "").strip().lower()
+        if normalized in ("menu", "services", "help"):
+            whatsapp_flow.send_service_menu(
+                dynamic_api, to_phone, wa_cfg, inbound_message_id
+            )
+            chat_history_handler.add_message(session_id, "assistant", wa_cfg.get("service_menu_message") or "Service menu sent")
+            if billing_user:
+                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
+            return
+
+        if whatsapp_booking.handle_text_message(
+            dynamic_api,
+            to_phone,
+            session_id,
+            text,
+            phone,
+            agent_id or "",
+            inbound_message_id=inbound_message_id,
+        ):
+            chat_history_handler.add_message(session_id, "assistant", "[booking flow]")
+            return
+
+        service_pick = whatsapp_flow.match_service_from_text(text, wa_cfg.get("services") or [])
+        if service_pick and str(service_pick.get("id", "")).lower() == whatsapp_booking.BOOK_VISIT_ID:
+            whatsapp_booking.start_booking(
+                dynamic_api, to_phone, session_id, inbound_message_id=inbound_message_id
+            )
+            chat_history_handler.add_message(session_id, "assistant", "[booking started]")
+            return
+
+        if whatsapp_flow.is_greeting_message(text):
+            whatsapp_flow.send_welcome_flow(
+                dynamic_api, to_phone, wa_cfg, PUBLIC_BASE_URL, inbound_message_id
+            )
+            chat_history_handler.add_message(session_id, "assistant", wa_cfg.get("welcome_message") or "Welcome")
+            if billing_user:
+                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
+            return
+
         canned_greeting = greeting_reply(text)
         if canned_greeting:
             if billing_user:
                 credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
             chat_history_handler.add_message(session_id, "assistant", canned_greeting)
-            dynamic_api.send_whatsapp_message(to_phone, canned_greeting)
-            return
-
-        if billing_user and not credits_store.can_accept_message(billing_user):
             dynamic_api.send_whatsapp_message(
-                to_phone,
-                "Your account is out of message credits. Please contact support to add more credits.",
+                to_phone, canned_greeting, inbound_message_id=inbound_message_id
             )
             return
 
-        if billing_user:
-            charge_type = credits_store.deduct_user_charge(billing_user, 1)
-
-        response_gen = await query_handler.aprocess_query(text, session_id, agent_id)
-
-        full_response = ""
-        async for chunk in response_gen:
-            if chunk:
-                full_response += chunk
-
-        if not full_response.strip():
-            full_response = (
-                "Sorry, I couldn't generate a reply just now. Please try again in a moment, "
-                "or rephrase your question."
-            )
-
-        if full_response:
-            agent_config = _get_agent_config(agent_id)
-            greeting_message = (agent_config.get("greeting_message") or "").strip()
-            if greeting_message and _should_prefix_greeting(session_id, text):
-                full_response = f"{greeting_message}\n\n{full_response}"
-
-            chat_history_handler.add_message(session_id, "assistant", full_response)
-            send_result = dynamic_api.send_whatsapp_message(to_phone, full_response)
-            if send_result.get("status") != "success":
-                logging.error(
-                    f"[WhatsApp] Outbound reply failed for session {session_id}: {send_result.get('error')}"
-                )
-                if billing_user and charge_type:
-                    credits_store.refund_user_charge(billing_user, charge_type, 1)
-                    credits_store.record_user_metric(billing_user, "total_failed_replies")
-                    charge_type = None
-
-            if billing_user:
-                credits_store.record_user_metric(billing_user, "total_successful_replies")
-                if charge_type:
-                    credits_store.log_usage_event(
-                        billing_user,
-                        "whatsapp",
-                        charge_type or "credit",
-                        1,
-                        session_id,
-                        agent_id or "",
-                    )
-
-            extract_and_save_lead(
-                session_id,
-                phone,
-                agent_id,
-                admin_phone=admin_phone,
-                access_token=access_token,
-                phone_number_id=mapped_phone_number_id,
-            )
-        elif billing_user and charge_type:
-            credits_store.refund_user_charge(billing_user, charge_type, 1)
-            credits_store.record_user_metric(billing_user, "total_failed_replies")
+        await _whatsapp_send_ai_reply(
+            session_id=session_id,
+            to_phone=to_phone,
+            phone=phone,
+            user_text=text,
+            agent_id=agent_id,
+            dynamic_api=dynamic_api,
+            inbound_message_id=inbound_message_id,
+            channel_config=channel_config,
+            billing_user=billing_user,
+        )
 
     except Exception as e:
         logging.error(f"Failed in async_process_whatsapp: {e}")
-        if billing_user and charge_type:
-            try:
-                credits_store.refund_user_charge(billing_user, charge_type, 1)
-                credits_store.record_user_metric(billing_user, "total_failed_replies")
-            except Exception:
-                pass
+
+
+async def async_process_whatsapp_interactive(
+    session_id: str,
+    phone: str,
+    selection_id: str,
+    waba_id: str = None,
+    phone_number_id: str = None,
+    inbound_message_id: str = None,
+    selection_title: str = None,
+):
+    try:
+        channel_config = await _resolve_whatsapp_channel(waba_id, phone_number_id)
+        if not channel_config:
+            return
+        agent_id = channel_config.get("ai_agent_id")
+        if not agent_id:
+            return
+
+        access_token = channel_config.get("access_token")
+        mapped_phone_number_id = channel_config.get("phone_number_id") or phone_number_id
+        dynamic_api = WhatsAppCloudAPI(
+            phone_number_id=mapped_phone_number_id,
+            access_token=access_token,
+            admin_phone=channel_config.get("admin_phone"),
+        )
+        to_phone = "+" + str(phone).replace("+", "").replace(" ", "")
+
+        billing_user = _billing_user_for_agent(agent_id)
+
+        if whatsapp_booking.is_booking_selection(selection_id):
+            whatsapp_booking.handle_selection(
+                dynamic_api,
+                to_phone,
+                session_id,
+                selection_id,
+                phone,
+                agent_id,
+                inbound_message_id=inbound_message_id,
+            )
+            return
+
+        wa_cfg = whatsapp_flow.parse_channel_config(channel_config)
+        services = wa_cfg.get("services") or []
+        service = whatsapp_flow.resolve_service_selection(
+            services, selection_id, selection_title
+        )
+        if not service:
+            dynamic_api.send_whatsapp_message(
+                to_phone,
+                "Sorry, I didn't recognize that option. Reply *menu* to see services again.",
+                inbound_message_id=inbound_message_id,
+            )
+            return
+
+        if str(service.get("id", "")).lower() == whatsapp_booking.BOOK_VISIT_ID:
+            whatsapp_booking.start_booking(
+                dynamic_api, to_phone, session_id, inbound_message_id=inbound_message_id
+            )
+            return
+
+        user_message = whatsapp_flow.service_as_user_message(
+            service, selection_title=selection_title
+        )
+        logging.info(
+            "[WhatsApp] Service menu → AI | id=%s | user_message=%s",
+            selection_id,
+            user_message,
+        )
+        chat_history_handler.add_message(session_id, "user", user_message)
+        await _whatsapp_send_ai_reply(
+            session_id=session_id,
+            to_phone=to_phone,
+            phone=phone,
+            user_text=user_message,
+            agent_id=agent_id,
+            dynamic_api=dynamic_api,
+            inbound_message_id=inbound_message_id,
+            channel_config=channel_config,
+            billing_user=billing_user,
+        )
+        if str(service.get("id", "")).lower() == "bca":
+            whatsapp_flow.record_bca_completed(phone)
+    except Exception as e:
+        logging.error(f"Failed in async_process_whatsapp_interactive: {e}")
+
+
+@app.post("/internal/whatsapp/bca-reminders/run")
+async def run_bca_reminders_internal(request: Request):
+    key = (request.headers.get("x-internal-api-key") or "").strip()
+    if CORE_INTERNAL_API_KEY and key != CORE_INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    sent = 0
+    channels: List[Dict[str, Any]] = []
+    try:
+        ch_body = _core_api_request("GET", "/whatsapp-channels/internal/all")
+        channels = ch_body.get("channels") or []
+    except Exception as e:
+        logging.error(f"[BCA] Failed to load channels: {e}")
+
+    force = str(request.query_params.get("force") or "").lower() in ("1", "true", "yes")
+
+    for channel in channels:
+        cfg = whatsapp_flow.parse_channel_config(channel)
+        bca = cfg.get("bca_reminder") or {}
+        if not bca.get("enabled"):
+            continue
+        interval = int(bca.get("interval_days") or 45)
+        message = str(bca.get("message") or "")
+        api = WhatsAppCloudAPI(
+            phone_number_id=channel.get("phone_number_id"),
+            access_token=channel.get("access_token"),
+        )
+        store = whatsapp_flow._load_bca_store()
+        targets = list(store.keys()) if force else whatsapp_flow.phones_due_for_bca(interval)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for digits in targets:
+            to_phone = f"+{digits}"
+            api.send_whatsapp_message(to_phone, message)
+            if not force:
+                store[digits] = now_iso
+            sent += 1
+        if not force and targets:
+            whatsapp_flow._save_bca_store(store)
+    return {"success": True, "sent": sent, "force": force}
+
+
+@app.post("/internal/whatsapp/broadcast")
+async def whatsapp_broadcast_internal(request: Request):
+    """Send a custom text message to multiple WhatsApp numbers for one channel."""
+    key = (request.headers.get("x-internal-api-key") or "").strip()
+    if CORE_INTERNAL_API_KEY and key != CORE_INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    phone_number_id = str(body.get("phone_number_id") or "").strip()
+    access_token = str(body.get("access_token") or "").strip()
+    message = str(body.get("message") or "").strip()
+    audience = str(body.get("audience") or "manual").strip().lower()
+    agent_id = str(body.get("agent_id") or "").strip() or None
+    manual_phones = body.get("phones")
+    if isinstance(manual_phones, str):
+        manual_phones = [manual_phones]
+    elif not isinstance(manual_phones, list):
+        manual_phones = []
+
+    if not phone_number_id or not access_token:
+        raise HTTPException(status_code=400, detail="phone_number_id and access_token are required")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    api = WhatsAppCloudAPI(
+        phone_number_id=phone_number_id,
+        access_token=access_token,
+        admin_phone=str(body.get("admin_phone") or "").strip() or None,
+    )
+    image_url = str(body.get("image_url") or "").strip() or None
+    image_path = str(body.get("image_path") or "").strip() or None
+    image_public_url = str(body.get("image_public_url") or "").strip() or None
+    image_base64 = str(body.get("image_base64") or "").strip() or None
+    image_mime = str(body.get("image_mime") or "").strip() or None
+
+    dry_run = str(body.get("dry_run") or "").lower() in ("1", "true", "yes")
+    if dry_run:
+        rows = whatsapp_broadcast.collect_recipient_rows(
+            audience=audience,
+            manual_phones=manual_phones,
+            agent_id=agent_id,
+        )
+        return {
+            "success": True,
+            "dry_run": True,
+            "recipients": len(rows),
+            "preview": rows[:20],
+        }
+
+    result = whatsapp_broadcast.run_broadcast(
+        api,
+        message=message,
+        audience=audience,
+        manual_phones=manual_phones,
+        agent_id=agent_id,
+        image_url=image_url,
+        image_path=image_path,
+        image_public_url=image_public_url,
+        image_base64=image_base64,
+        image_mime=image_mime,
+    )
+    return result
 
 
 @app.post("/webhook/whatsapp")
 async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
-        data = await request.json()
+        raw_body = await request.body()
+        signature = request.headers.get("X-Hub-Signature-256")
+        if not _verify_whatsapp_signature(raw_body, signature):
+            return JSONResponse(status_code=403, content={"error": "Invalid signature"})
+
+        data = json.loads(raw_body.decode("utf-8") or "{}")
 
         if "entry" in data:
             for entry in data["entry"]:
@@ -420,15 +759,16 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
 
                     if "messages" in value:
                         for msg in value["messages"]:
+                            if _whatsapp_message_already_handled(msg.get("id")):
+                                continue
                             phone = msg.get("from")
                             if not phone:
                                 continue
-                            if msg.get("type") == "text":
-                                text = msg["text"]["body"]
-                                # Include WABA ID and bot phone_number_id in the session
-                                # so different bots/accounts produce distinct sessions.
-                                session_id = f"whatsapp_{waba_id}_{phone_number_id}_{phone}"
+                            session_id = f"whatsapp_{waba_id}_{phone_number_id}_{phone}"
+                            msg_type = msg.get("type")
 
+                            if msg_type == "text":
+                                text = msg["text"]["body"]
                                 background_tasks.add_task(
                                     async_process_whatsapp,
                                     session_id,
@@ -439,6 +779,29 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                                     display_phone_number,
                                     msg.get("id"),
                                 )
+                            elif msg_type == "interactive":
+                                interactive = msg.get("interactive") or {}
+                                selection_id = None
+                                selection_title = None
+                                if interactive.get("type") == "list_reply":
+                                    list_reply = interactive.get("list_reply") or {}
+                                    selection_id = list_reply.get("id")
+                                    selection_title = list_reply.get("title")
+                                elif interactive.get("type") == "button_reply":
+                                    btn = interactive.get("button_reply") or {}
+                                    selection_id = btn.get("id")
+                                    selection_title = btn.get("title")
+                                if selection_id:
+                                    background_tasks.add_task(
+                                        async_process_whatsapp_interactive,
+                                        session_id,
+                                        phone,
+                                        selection_id,
+                                        waba_id,
+                                        phone_number_id,
+                                        msg.get("id"),
+                                        selection_title,
+                                    )
                             else:
                                 msg_type = msg.get("type") or "unknown"
                                 hint = (
@@ -765,6 +1128,11 @@ async def agent_response_generator_chat(user_input: str, session_id: str, agent_
                     session_id,
                     agent_id or "",
                 )
+                credits_store.record_token_usage(
+                    billing_user,
+                    session_id,
+                    credits_store.estimate_tokens(user_input, full_response),
+                )
         else:
             if billing_user and charge_type:
                 credits_store.refund_user_charge(billing_user, charge_type, 1)
@@ -941,6 +1309,15 @@ async def get_credits_billing(user_id: str):
     return credits_store.get_user_billing_and_monitoring(uid)
 
 
+@app.get("/credits/tokens")
+async def get_credits_tokens(user_id: str):
+    """Per-session LLM token usage (chattiq-wp-credits-new parity)."""
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    uid = user_id.strip()
+    return credits_store.get_token_usage_per_session(uid)
+
+
 @app.post("/credits/onboard")
 async def post_credits_onboard(body: CreditsOnboardBody):
     plan = (body.plan or "").strip()
@@ -981,6 +1358,101 @@ async def post_credits_add(payload: dict = Body(...)):
 
 
 # ─── Background indexing helpers ──────────────────────────────────────────────
+SSQUARE_AGENT_ID = "agent_1780319230183_2blh5h"
+SSQUARE_KB_PDF = "temp_files/S_Square_Fitness_Club_Complete_Document.pdf"
+
+
+def _set_agent_resources(agent_id: str, resource_list: List[str]) -> bool:
+    """Replace agent resource_list in Agents_store.json and PostgreSQL."""
+    paths = [str(p).strip() for p in (resource_list or []) if str(p).strip()]
+    try:
+        if os.path.exists(AGENTS_DB):
+            with open(AGENTS_DB, "r", encoding="utf-8") as f:
+                agents = json.load(f)
+        else:
+            agents = []
+        found = False
+        for agent in agents:
+            if agent.get("id") == agent_id:
+                agent["resource_list"] = paths
+                found = True
+                break
+        if not found:
+            logging.warning(f"Agent {agent_id} not in {AGENTS_DB}")
+            return False
+        with open(AGENTS_DB, "w", encoding="utf-8") as f:
+            json.dump(agents, f, indent=4, ensure_ascii=False)
+        try:
+            _core_api_request(
+                "PUT",
+                f"/internal/agents/{agent_id}/resources",
+                json_body={"resource_list": paths},
+            )
+        except Exception as sync_err:
+            logging.warning(f"[KnowledgeBase] PG resource sync failed for {agent_id}: {sync_err}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to set agent resources: {e}")
+        return False
+
+
+def _bg_rebuild_agent_kb(task_id: str, agent_id: str, pdf_path: str, collection_name: str):
+    from AgentManager.KnowledgeManagerAgent.resources import rebuild_pdf_knowledge_base
+
+    try:
+        indexing_tasks[task_id] = {
+            "status": "processing",
+            "message": "Clearing old vectors and indexing PDF…",
+        }
+        rebuild_pdf_knowledge_base(pdf_path, collection_name, clear_existing=True)
+        indexing_tasks[task_id] = {
+            "status": "success",
+            "message": f"Knowledge base rebuilt from {os.path.basename(pdf_path)}",
+        }
+    except Exception as e:
+        logging.error(f"KB rebuild failed for {agent_id}: {e}", exc_info=True)
+        indexing_tasks[task_id] = {"status": "error", "message": str(e)}
+
+
+@app.post("/internal/agents/{agent_id}/rebuild-knowledge")
+async def rebuild_agent_knowledge_internal(
+    agent_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Clear Weaviate collection and re-index from the agent's sole PDF (internal)."""
+    key = (request.headers.get("x-internal-api-key") or "").strip()
+    if CORE_INTERNAL_API_KEY and key != CORE_INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+
+    agent = _get_agent_config(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    collection_name = agent.get("collection_name") or ""
+    resources = agent.get("resource_list") or []
+    if not resources:
+        resources = [SSQUARE_KB_PDF]
+    pdf_path = resources[0]
+    if not pdf_path.startswith("temp_files"):
+        pdf_path = os.path.join("temp_files", os.path.basename(pdf_path))
+    if not os.path.isfile(pdf_path):
+        raise HTTPException(status_code=400, detail=f"PDF not found: {pdf_path}")
+
+    _set_agent_resources(agent_id, [pdf_path.replace("\\", "/")])
+
+    task_id = f"rebuild_{uuid.uuid4().hex[:12]}"
+    indexing_tasks[task_id] = {"status": "processing", "message": "Starting rebuild…"}
+    background_tasks.add_task(_bg_rebuild_agent_kb, task_id, agent_id, pdf_path, collection_name)
+    return {
+        "status": "accepted",
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "collection_name": collection_name,
+        "pdf": pdf_path,
+    }
+
+
 def _update_agent_resource(agent_id: str, resource_path: str):
     """Update Agents_store.json with a new resource entry."""
     try:
@@ -992,8 +1464,10 @@ def _update_agent_resource(agent_id: str, resource_path: str):
 
         for agent in agents:
             if agent["id"] == agent_id:
-                merged_name = f"{agent['name']}_{agent['id']}"
-                agent["collection_name"] = merged_name
+                # Keep existing collection_name (must match Weaviate index from upload form).
+                if not agent.get("collection_name"):
+                    safe_name = re.sub(r"\s+", "_", str(agent.get("name") or "agent").strip())
+                    agent["collection_name"] = f"{safe_name}_{agent_id}"
 
                 if "resource_list" in agent:
                     if isinstance(agent["resource_list"], list):

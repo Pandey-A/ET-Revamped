@@ -1,21 +1,22 @@
 {
   "OpenAI": {
+    "Key": "set-via-OPENAI_API_KEY-env",
     "model": "gpt-4o-mini",
-    "temperature": 0.7,
-    "Key": "sk-REPLACE_ME"
+    "temperature": 0.7
+  },
+  "Bedrock": {
+    "model_id": "gpt-oss-120b",
+    "embed_model_id": "amazon.titan-embed-text-v2:0",
+    "region": "ap-south-1",
+    "temperature": 0.7
   },
   "weaviate": {
-    "url": "http://127.0.0.1:8080",
-    "api_key": ""
+    "url": "http://localhost:8080",
+    "api_key": null,
+    "grpc_port": 50051
   },
   "cohere": {
-    "api_key": "REPLACE_ME"
-  },
-  "Redis": {
-    "url": "redis://127.0.0.1:6379"
-  },
-  "MongoDB": {
-    "uri": "mongodb://127.0.0.1:27017"
+    "api_key": ""
   },
   "Telegram": {
     "bots": []
@@ -23,6 +24,11 @@
   "WhatsApp": {
     "phone_number_id": "",
     "access_token": "",
+    "business_account_id": "",
     "admin_phone": ""
+  },
+  "Redis": {
+    "url": "redis://localhost:6379",
+    "ttl": null
   }
 }

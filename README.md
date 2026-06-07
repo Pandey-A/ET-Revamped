@@ -11,8 +11,24 @@ The platform consists of four main layers:
 3. **AI Runtime (Python/FastAPI)**: Runs on port `8000`. Handles LLM interactions (OpenAI/Cohere), RAG (Weaviate), chat session state, and messaging integrations (WhatsApp/Telegram).
 4. **Data Layer**:
    - **PostgreSQL**: Stores users, agents metadata, and widget configurations.
-   - **Redis**: Stores chat history and ephemeral session states.
+   - **Redis**: Stores chat history, ephemeral session states, and **message credits** (`chattiq:*` keys).
    - **Weaviate**: Stores vector embeddings for document Q&A.
+
+## Credits system
+
+Production billing runs inside **FastAPI** via `HR-Reachout-Agent-main/AgentManager/credits_store.py` (integrated from `chattiq-wp-credits-new/`). Redis keys use the `chattiq:` namespace; accounts are keyed by platform user ID (agent owner).
+
+| Layer | Role |
+|-------|------|
+| `credits_store.py` | Credits, plans, metrics, per-session token tracking |
+| `credits_greetings.py` | Greeting bypass (no credit charge) |
+| FastAPI `/credits/billing`, `/credits/tokens`, `/credits/onboard`, `/credits/add` | Billing API |
+| Express `GET /api/credits/me`, `GET /api/credits/tokens` | Authenticated proxy for the dashboard |
+| `client_new/app/credits/` | Credits dashboard UI |
+
+The standalone `chattiq-wp-credits-new/` package (SQS producer/consumer) is kept for reference and optional WhatsApp microservice deployment; the main app does **not** run it as a separate service.
+
+**Requirements:** Redis must be running (`REDIS_URL` or `REDIS_HOST`/`REDIS_PORT` in env). Express proxies to FastAPI on port `8000` via `AI_AGENT_API_URL`.
 
 ## Local Development
 

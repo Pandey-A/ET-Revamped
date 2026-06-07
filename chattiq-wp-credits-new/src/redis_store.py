@@ -91,6 +91,17 @@ def record_user_metric(user_id: str, field: str, amount: int = 1):
     client.hincrby(key, field, amount)
     client.hset(key, "last_active_at", datetime.now(timezone.utc).isoformat() + "Z")
 
+def record_token_usage(user_id: str, session_id: str, tokens: int):
+    client = get_redis_client()
+    key = f"whatsapp:tokens:{user_id}"
+    client.hincrby(key, session_id, tokens)
+
+def get_token_usage_per_session(user_id: str) -> dict:
+    client = get_redis_client()
+    key = f"whatsapp:tokens:{user_id}"
+    data = client.hgetall(key)
+    return {k: int(v) for k, v in data.items()}
+
 def onboard_user_plan(user_id: str, plan: str, credits_to_add: int, allow_overdraft: bool = False, overdraft_rate: int = 0) -> dict:
     client = get_redis_client()
     key = f"whatsapp:account:{user_id}"
@@ -173,6 +184,8 @@ def get_user_billing_and_monitoring(user_id: str) -> dict:
     metrics_key = f"whatsapp:metrics:{user_id}"
     data = client.hgetall(metrics_key)
     
+    session_tokens = get_token_usage_per_session(user_id)
+    
     return {
         "user_id": user_id,
         "billing": {
@@ -188,6 +201,7 @@ def get_user_billing_and_monitoring(user_id: str) -> dict:
             "total_greetings_bypassed": int(data.get("total_greetings_bypassed", 0)),
             "total_successful_replies": int(data.get("total_successful_replies", 0)),
             "total_failed_replies": int(data.get("total_failed_replies", 0)),
-            "last_active_at": data.get("last_active_at", None)
+            "last_active_at": data.get("last_active_at", None),
+            "token_usage_per_session": session_tokens
         }
     }

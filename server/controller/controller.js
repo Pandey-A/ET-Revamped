@@ -9,7 +9,7 @@ function newUserId() {
   return crypto.randomBytes(12).toString('hex');
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'CLIENT_SECRET_KEY';
+const JWT_SECRET = (process.env.JWT_SECRET || '').trim() || 'dev-only-insecure-jwt-secret-not-for-production';
 const EMAIL_VERIFY_SECRET = process.env.EMAIL_VERIFY_SECRET || JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const COOKIE_NAME = 'token';

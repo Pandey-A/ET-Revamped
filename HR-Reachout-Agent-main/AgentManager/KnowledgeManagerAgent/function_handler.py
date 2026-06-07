@@ -16,14 +16,19 @@ import cohere
 with open("AgentManager/config.json", "r") as config_file:
     config = json.load(config_file)
 
-weaviate_url = config["weaviate"]["url"]
-weaviate_api_key = config["weaviate"].get("api_key", None)
-cohere_api_key = config["cohere"]["api_key"]
+wc = config.get("weaviate") or {}
+weaviate_url = (os.getenv("WEAVIATE_URL") or wc.get("url") or "http://localhost:8080").strip()
+weaviate_api_key = os.getenv("WEAVIATE_API_KEY") or wc.get("api_key")
+cohere_api_key = (os.getenv("COHERE_API_KEY") or (config.get("cohere") or {}).get("api_key") or "").strip()
 # Ignore weak KB matches when Cohere rerank score is below this (filters trivia/unrelated queries).
 MIN_RERANK_RELEVANCE = float(config.get("rag", {}).get("min_rerank_relevance", 0.12))
 
-os.environ["COHERE_API_KEY"] = cohere_api_key
-co = cohere.Client()
+_co_client: Optional[cohere.Client] = None
+if cohere_api_key:
+    os.environ["COHERE_API_KEY"] = cohere_api_key
+    _co_client = cohere.Client(api_key=cohere_api_key)
+else:
+    print("[RAG] COHERE_API_KEY not set — using vector retrieval only (no rerank).")
 
 
 def _connect_weaviate():
@@ -104,30 +109,42 @@ class RAG:
             doc_texts = [node.text.strip() for node in results if node.text and node.text.strip()]
 
             if not doc_texts:
+                print("[RAG] No documents retrieved from Weaviate for this query.")
                 return None
 
-            rerank_docs = co.rerank(
-                query=query, documents=doc_texts, top_n=3, model="rerank-v3.5"
-            )
-            print("Reranking Done")
-
-            if rerank_docs.results:
-                best = rerank_docs.results[0]
-                score = getattr(best, "relevance_score", None)
-                if score is None or score < MIN_RERANK_RELEVANCE:
-                    print(
-                        f"[RAG] Best relevance {score} below threshold "
-                        f"{MIN_RERANK_RELEVANCE} — weak match only"
-                    )
+            if _co_client:
+                rerank_docs = _co_client.rerank(
+                    query=query, documents=doc_texts, top_n=min(3, len(doc_texts)), model="rerank-v3.5"
+                )
+                print("Reranking Done")
+                if rerank_docs.results:
+                    best = rerank_docs.results[0]
+                    score = getattr(best, "relevance_score", None)
+                    chunk = doc_texts[best.index]
+                    if score is None or score < MIN_RERANK_RELEVANCE:
+                        # Low rerank often happens for valid business questions that
+                        # sound like general geography (e.g. "where is the gym located").
+                        print(
+                            f"[RAG] Best relevance {score} below threshold "
+                            f"{MIN_RERANK_RELEVANCE} — falling back to top vector match"
+                        )
+                        return {
+                            "chunk": chunk,
+                            "relevance_score": score,
+                            "rerank_weak": True,
+                        }
                     return {
-                        "weak_match": True,
+                        "chunk": chunk,
                         "relevance_score": score,
                     }
-                return {
-                    "chunk": doc_texts[best.index],
-                    "relevance_score": score,
-                }
-            return None
+                return None
+
+            # No Cohere key: use best vector match directly
+            return {
+                "chunk": doc_texts[0],
+                "relevance_score": 1.0,
+            }
 
         except Exception as e:
-            return f"An error occurred during retrieval: {str(e)}"
+            print(f"[RAG] Retrieval error: {e}")
+            return None

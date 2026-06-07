@@ -27,7 +27,7 @@ app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 
 const globalLimiter = createRateLimiter({
