@@ -20,11 +20,16 @@ def call_llm_rag(context: str, query: str, provider: str = None) -> dict:
         provider = LLM_PROVIDER
         
     prompt = f"""
-    You are a helpful assistant. Answer the user using ONLY the provided context and knowledge.
-    If you cannot answer the question, you MUST set 'is_answered' to false.
+    You are a helpful WhatsApp assistant. 
+    Below is the recent chat history between you and the user:
     
-    Context: {context}
-    User Query: {query}
+    {context}
+    
+    The user just sent a new message: "{query}"
+    
+    Please respond directly to the user's new message in a conversational tone. 
+    DO NOT repeat or echo the chat history back to the user.
+    If you cannot answer the question or assist the user, you MUST set 'is_answered' to false.
     """
     
     if provider.lower() == "openai":
