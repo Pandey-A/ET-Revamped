@@ -6,11 +6,12 @@ function validateBody(schema) {
     });
 
     if (error) {
+      const details = error.details.map((d) => d.message.replace(/"/g, ''));
       return res.status(400).json({
         success: false,
         code: 'VALIDATION_ERROR',
-        message: 'Invalid request payload',
-        details: error.details.map((d) => d.message),
+        message: details[0] || 'Invalid request payload',
+        details,
       });
     }
 

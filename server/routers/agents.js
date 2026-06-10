@@ -1,7 +1,9 @@
 const express = require('express');
 const crypto = require('crypto');
 const { authMiddleware } = require('../middleware/auth');
+const { validateBody } = require('../middleware/validate');
 const aiAgentRepo = require('../repositories/aiAgentRepo');
+const { agentCreateSchema, agentPatchSchema } = require('../schemas/agentSchemas');
 
 const router = express.Router();
 
@@ -165,38 +167,29 @@ router.get('/agents', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/agents', authMiddleware, async (req, res) => {
+router.post('/agents', authMiddleware, validateBody(agentCreateSchema), async (req, res) => {
   try {
     const body = req.body || {};
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name) {
-      return res.status(400).json({ success: false, message: 'name is required' });
-    }
+    const name = body.name;
 
-    const clientId = typeof body.id === 'string' ? body.id.trim() : '';
+    const clientId = body.id || '';
     const id =
       clientId ||
       `agent_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
-    const description = typeof body.description === 'string' ? body.description.trim() : '';
-    const greeting_message = typeof body.greeting_message === 'string' ? body.greeting_message.trim() : '';
-    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : 'gpt-4o-mini';
+    const description = body.description || '';
+    const greeting_message = body.greeting_message || '';
+    const model = body.model || 'gpt-4o-mini';
     const temperature = Number(body.temperature ?? 0.7);
-    const escalation_channel =
-      typeof body.escalation_channel === 'string' && body.escalation_channel.trim()
-        ? body.escalation_channel.trim()
-        : 'none';
+    const escalation_channel = 'none';
     const collection_name =
-      typeof body.collection_name === 'string' && body.collection_name.trim()
-        ? body.collection_name.trim()
-        : `${name.replace(/\s+/g, '_')}_${id}`;
-    const resource_list = Array.isArray(body.resource_list) ? body.resource_list : [];
+      body.collection_name ||
+      `${name.replace(/\s+/g, '_')}_${id}`;
+    const resource_list = body.resource_list || [];
     const public_embed = body.public_embed !== false;
-    const widget_contact_email =
-      typeof body.widget_contact_email === 'string' ? body.widget_contact_email.trim() : '';
-    const whatsapp_contact_email =
-      typeof body.whatsapp_contact_email === 'string' ? body.whatsapp_contact_email.trim() : '';
-    const company_name = typeof body.company_name === 'string' ? body.company_name.trim() : '';
+    const widget_contact_email = body.widget_contact_email || '';
+    const whatsapp_contact_email = body.whatsapp_contact_email || '';
+    const company_name = body.company_name || '';
     const extra = {
       ...(typeof body.extra === 'object' && body.extra !== null ? body.extra : {}),
       widget_contact_email,
@@ -254,7 +247,7 @@ router.post('/agents', authMiddleware, async (req, res) => {
   }
 });
 
-router.patch('/agents/:id', authMiddleware, async (req, res) => {
+router.patch('/agents/:id', authMiddleware, validateBody(agentPatchSchema), async (req, res) => {
   try {
     const agentId = String(req.params.id);
     const existing = await aiAgentRepo.findByIdForOwner(agentId, req.user.id);
@@ -264,28 +257,38 @@ router.patch('/agents/:id', authMiddleware, async (req, res) => {
 
     const body = req.body || {};
     const patch = {};
-    if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim();
-    if (typeof body.description === 'string') patch.description = body.description.trim();
-    if (typeof body.greeting_message === 'string') patch.greeting_message = body.greeting_message.trim();
-    if (typeof body.model === 'string' && body.model.trim()) patch.model = body.model.trim();
+    if (body.name !== undefined) patch.name = body.name;
+    if (body.description !== undefined) patch.description = body.description;
+    if (body.greeting_message !== undefined) patch.greeting_message = body.greeting_message;
+    if (body.model !== undefined) patch.model = body.model;
     if (body.temperature !== undefined) patch.temperature = Number(body.temperature);
-    if (typeof body.escalation_channel === 'string') patch.escalation_channel = body.escalation_channel.trim();
 
     const extra = { ...(existing.extra || {}) };
-    if (typeof body.widget_contact_email === 'string') {
-      extra.widget_contact_email = body.widget_contact_email.trim();
+    if (body.widget_contact_email !== undefined) {
+      extra.widget_contact_email = body.widget_contact_email;
     }
-    if (typeof body.whatsapp_contact_email === 'string') {
-      extra.whatsapp_contact_email = body.whatsapp_contact_email.trim();
+    if (body.whatsapp_contact_email !== undefined) {
+      extra.whatsapp_contact_email = body.whatsapp_contact_email;
     }
-    if (typeof body.company_name === 'string') {
-      extra.company_name = body.company_name.trim();
+    if (body.company_name !== undefined) {
+      extra.company_name = body.company_name;
     }
     patch.extra = extra;
 
-    const agent = await aiAgentRepo.updateAgentForOwner(agentId, req.user.id, patch);
+    let agent = await aiAgentRepo.updateAgentForOwner(agentId, req.user.id, patch);
     if (!agent) {
       return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    if (body.resource_list !== undefined) {
+      agent = await aiAgentRepo.setResourceListForOwner(
+        agentId,
+        req.user.id,
+        body.resource_list
+      );
+      if (!agent) {
+        return res.status(404).json({ success: false, message: 'Agent not found' });
+      }
     }
 
     if (FASTAPI_SYNC) {

@@ -1,4 +1,4 @@
--- ElevateTrust: PostgreSQL schema (MongoDB migration target)
+-- Chattiq: PostgreSQL schema
 -- Run via: npm run db:migrate
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

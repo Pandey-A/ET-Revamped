@@ -143,7 +143,7 @@ async function sendEmailVerificationMail(userId) {
           <tr>
             <td style="padding-top:20px; font-size:12px; color:#999; text-align:center;">
               <p>If you didn\'t create an account, you can safely ignore this email.</p>
-              <p>© 2026 ElevateTrust AI</p>
+              <p>© 2026 Chattiq</p>
             </td>
           </tr>
         </table>
@@ -158,7 +158,7 @@ async function sendEmailVerificationMail(userId) {
   await transporter.sendMail({
     from: EMAIL_FROM,
     to: user.email,
-    subject: 'Verify Your Email - ElevateTrust AI',
+    subject: 'Verify Your Email - Chattiq',
     text: `Hello ${displayName}, verify your account using this link: ${verifyUrl}`,
     html: verifyEmailHtml,
   });

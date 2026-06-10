@@ -3,12 +3,18 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { authMiddleware } = require('../middleware/auth');
+const { validateBody } = require('../middleware/validate');
 const aiAgentRepo = require('../repositories/aiAgentRepo');
 const repo = require('../repositories/whatsappChannelRepo');
+const {
+  whatsAppChannelCreateSchema,
+  whatsAppChannelUpdateSchema,
+  whatsAppBroadcastPreviewSchema,
+} = require('../schemas/whatsappChannelSchemas');
 
 const router = express.Router();
 
-// Temporary: fixed BCA image on every broadcast (same file as HR-Reachout-Agent-main/temp_files/)
+// Temporary: fixed BCA image on every broadcast (same file as ai-runtime/temp_files/)
 const HARDCODED_BROADCAST_IMAGE = path.join(
   __dirname,
   '..',
@@ -89,7 +95,7 @@ function formatBroadcastApiError(data, status) {
   return data?.error || data?.message || `Broadcast request failed (HTTP ${status})`;
 }
 
-router.post('/whatsapp-channels/:id/broadcast/preview', authMiddleware, async (req, res) => {
+router.post('/whatsapp-channels/:id/broadcast/preview', authMiddleware, validateBody(whatsAppBroadcastPreviewSchema), async (req, res) => {
   try {
     const channelId = String(req.params.id || '').trim();
     const channel = await repo.findByIdForOwner(channelId, req.user.id, { maskToken: false });
@@ -347,19 +353,13 @@ router.get('/whatsapp-channels', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/whatsapp-channels', authMiddleware, async (req, res) => {
+router.post('/whatsapp-channels', authMiddleware, validateBody(whatsAppChannelCreateSchema), async (req, res) => {
   try {
     const body = req.body || {};
-    const waba = repo.normalizeDigits(body.whatsapp_business_account_id);
-    const phone = repo.normalizeDigits(body.phone_number_id);
-    const token = String(body.access_token || '').trim();
-    const agentId = String(body.ai_agent_id || '').trim();
-    if (!waba || !phone || !token || !agentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'whatsapp_business_account_id, phone_number_id, access_token, ai_agent_id are required',
-      });
-    }
+    const waba = body.whatsapp_business_account_id;
+    const phone = body.phone_number_id;
+    const token = body.access_token;
+    const agentId = body.ai_agent_id;
     const ownedAgent = await aiAgentRepo.findByIdForOwner(agentId, req.user.id);
     if (!ownedAgent) {
       return res.status(400).json({ success: false, message: 'Selected AI agent is not owned by current user' });
@@ -390,7 +390,7 @@ router.post('/whatsapp-channels', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/whatsapp-channels/:id', authMiddleware, async (req, res) => {
+router.put('/whatsapp-channels/:id', authMiddleware, validateBody(whatsAppChannelUpdateSchema), async (req, res) => {
   try {
     const id = String(req.params.id || '');
     const current = await repo.findByIdForOwner(id, req.user.id);
@@ -398,12 +398,9 @@ router.put('/whatsapp-channels/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Channel not found' });
     }
     const body = req.body || {};
-    const nextWaba = repo.normalizeDigits(body.whatsapp_business_account_id ?? current.whatsapp_business_account_id);
-    const nextPhone = repo.normalizeDigits(body.phone_number_id ?? current.phone_number_id);
-    const nextAgent = String(body.ai_agent_id ?? current.ai_agent_id).trim();
-    if (!nextWaba || !nextPhone || !nextAgent) {
-      return res.status(400).json({ success: false, message: 'Invalid channel payload' });
-    }
+    const nextWaba = body.whatsapp_business_account_id ?? current.whatsapp_business_account_id;
+    const nextPhone = body.phone_number_id ?? current.phone_number_id;
+    const nextAgent = body.ai_agent_id ?? current.ai_agent_id;
     const ownedAgent = await aiAgentRepo.findByIdForOwner(nextAgent, req.user.id);
     if (!ownedAgent) {
       return res.status(400).json({ success: false, message: 'Selected AI agent is not owned by current user' });

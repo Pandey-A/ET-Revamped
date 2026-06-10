@@ -31,15 +31,6 @@ const upload = multer({
   },
 });
 
-// Deepfake analysis routes — disabled (service not deployed)
-router.all(/^\/analysis(?:\/|$)/, (req, res) => {
-  res.status(503).json({
-    success: false,
-    code: 'SERVICE_NOT_AVAILABLE',
-    message: 'Deepfake analysis service is not currently available.',
-  });
-});
-
 // Upload widget logo / WhatsApp menu images (authenticated)
 router.post('/upload/logo', authMiddleware, upload.single('file'), (req, res) => {
   if (!req.file) {

@@ -77,8 +77,8 @@ const envAllowedOrigins = new Set([
         'http://localhost:3000',
         'http://127.0.0.1:3000',
         'http://localhost:5173',
-        'https://elevatetrust.in',
-        'https://www.elevatetrust.in',
+        'https://chatiq.co.in',
+        'https://www.chatiq.co.in',
       ]),
 ]);
 

@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-redis
-requests
-boto3
-python-dotenv
-tiktoken
-google-generativeai

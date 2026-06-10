@@ -16,7 +16,7 @@ The platform consists of four main layers:
 
 ## Credits system
 
-Production billing runs inside **FastAPI** via `HR-Reachout-Agent-main/AgentManager/credits_store.py` (integrated from `chattiq-wp-credits-new/`). Redis keys use the `chattiq:` namespace; accounts are keyed by platform user ID (agent owner).
+Production billing runs inside **FastAPI** via `ai-runtime/AgentManager/credits_store.py`. Redis keys use the `chattiq:` namespace; accounts are keyed by platform user ID (agent owner).
 
 | Layer | Role |
 |-------|------|
@@ -24,11 +24,18 @@ Production billing runs inside **FastAPI** via `HR-Reachout-Agent-main/AgentMana
 | `credits_greetings.py` | Greeting bypass (no credit charge) |
 | FastAPI `/credits/billing`, `/credits/tokens`, `/credits/onboard`, `/credits/add` | Billing API |
 | Express `GET /api/credits/me`, `GET /api/credits/tokens` | Authenticated proxy for the dashboard |
-| `client_new/app/credits/` | Credits dashboard UI |
-
-The standalone `chattiq-wp-credits-new/` package (SQS producer/consumer) is kept for reference and optional WhatsApp microservice deployment; the main app does **not** run it as a separate service.
+| `web/app/credits/` | Credits dashboard UI |
 
 **Requirements:** Redis must be running (`REDIS_URL` or `REDIS_HOST`/`REDIS_PORT` in env). Express proxies to FastAPI on port `8000` via `AI_AGENT_API_URL`.
+
+## Repository layout
+
+| Path | Role |
+|------|------|
+| `web/` | Next.js frontend (admin, widget, BFF) |
+| `server/` | Express API (auth, agents, Postgres) |
+| `ai-runtime/` | Python FastAPI AI runtime (LLM, WhatsApp, credits) |
+| `deploy/` | EC2 systemd, nginx, docker-compose infra |
 
 ## Local Development
 
@@ -54,7 +61,7 @@ npm run dev
 
 ### 4. Frontend (Next.js)
 ```bash
-cd client_new
+cd web
 cp .env.local .env.local  # Update API URLs if needed
 npm install
 npm run dev
@@ -62,7 +69,7 @@ npm run dev
 
 ### 5. AI Runtime (FastAPI)
 ```bash
-cd HR-Reachout-Agent-main
+cd ai-runtime
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -88,10 +95,10 @@ Deployment is managed via a single bash script that handles installing dependenc
 
 2. **Clone the repository:**
    ```bash
-   sudo mkdir -p /opt/deepfake_et_frontend
-   sudo chown ubuntu:ubuntu /opt/deepfake_et_frontend
-   git clone -b feature/chatops-deploy <REPO_URL> /opt/deepfake_et_frontend
-   cd /opt/deepfake_et_frontend
+   sudo mkdir -p /opt/chattiq
+   sudo chown ubuntu:ubuntu /opt/chattiq
+   git clone -b feature/chatops-deploy <REPO_URL> /opt/chattiq
+   cd /opt/chattiq
    ```
 
 3. **Configure Environment:**
@@ -107,9 +114,9 @@ Deployment is managed via a single bash script that handles installing dependenc
 
    Finally, configure the AI Agent API keys:
    ```bash
-   cp HR-Reachout-Agent-main/AgentManager/config.json.example \
-      HR-Reachout-Agent-main/AgentManager/config.json
-   nano HR-Reachout-Agent-main/AgentManager/config.json
+   cp ai-runtime/AgentManager/config.json.example \
+      ai-runtime/AgentManager/config.json
+   nano ai-runtime/AgentManager/config.json
    ```
 
 4. **Run the Deployment Script:**
@@ -129,7 +136,7 @@ Deployment is managed via a single bash script that handles installing dependenc
 ### Updating an existing deployment
 To deploy new code changes to a running server:
 ```bash
-cd /opt/deepfake_et_frontend
+cd /opt/chattiq
 git pull origin <branch_name>
 sudo bash deploy/scripts/deploy-ec2.sh
 ```

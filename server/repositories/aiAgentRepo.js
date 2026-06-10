@@ -196,6 +196,12 @@ async function setResourceListByAgentId(agentId, resourceList) {
   return findById(agentId);
 }
 
+async function setResourceListForOwner(agentId, ownerUserId, resourceList) {
+  const current = await findByIdForOwner(agentId, ownerUserId);
+  if (!current) return null;
+  return setResourceListByAgentId(agentId, resourceList);
+}
+
 module.exports = {
   listByOwner,
   findByIdForOwner,
@@ -207,5 +213,6 @@ module.exports = {
   getWidgetPreset,
   appendResourceByAgentId,
   setResourceListByAgentId,
+  setResourceListForOwner,
   mapAgentRow,
 };

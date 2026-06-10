@@ -11,9 +11,19 @@ build/
 out/
 out.zip
 
-# Environment & secrets
+# Environment & secrets (NEVER commit keys, tokens, or .pem files)
 .env*
+.env.*
+!.env.example
+!.env.*.example
 *.pem
+*.ppk
+*_rsa
+*_ed25519
+id_rsa*
+*.key
+deploy/
+!deploy/keys/.gitignore
 **/config.json
 !**/config.json.example
 
