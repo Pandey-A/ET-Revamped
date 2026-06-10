@@ -185,6 +185,8 @@ class WhatsAppCloudAPI:
             resp = requests.post(url, headers=headers, json=payload, timeout=25)
             result = resp.json()
             if resp.status_code in (200, 201):
+                msg_type = payload.get("type") or "message"
+                logger.info("[WhatsApp] %s sent to %s: %s", msg_type, to, result)
                 return {"status": "success", "response": result}
             logger.error(f"[WhatsApp] API error {resp.status_code}: {result}")
             return {"status": "error", "error": result}

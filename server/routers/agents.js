@@ -28,8 +28,20 @@ const OPENAI_DEFAULT_MODEL =
 
 function resolveRuntimeModel(model) {
   const m = (model || '').trim();
-  if (m) return m;
-  return OPENAI_DEFAULT_MODEL;
+  if (!m) return OPENAI_DEFAULT_MODEL;
+  const lower = m.toLowerCase();
+  if (
+    lower.startsWith('gpt-') ||
+    lower.startsWith('o1') ||
+    lower.startsWith('o3') ||
+    lower.startsWith('o4') ||
+    lower.startsWith('chatgpt-')
+  ) {
+    return m;
+  }
+  // Bedrock-style ids left on older agents
+  if (m.includes('.')) return OPENAI_DEFAULT_MODEL;
+  return m || OPENAI_DEFAULT_MODEL;
 }
 
 function pickContactFields(agent) {

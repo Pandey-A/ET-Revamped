@@ -11,18 +11,6 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
 }
 
-function isValidUrlOrPath(value) {
-  const text = String(value || '').trim();
-  if (!text) return true;
-  if (text.startsWith('/')) return true;
-  try {
-    const u = new URL(text);
-    return ['http:', 'https:'].includes(u.protocol);
-  } catch {
-    return false;
-  }
-}
-
 export function validateWhatsAppChannelForm(form, { isEdit = false } = {}) {
   const errors = [];
 
@@ -44,29 +32,13 @@ export function validateWhatsAppChannelForm(form, { isEdit = false } = {}) {
     errors.push('Linked AI agent is required');
   }
 
-  const services = form.config_json?.services || [];
-  services.forEach((svc, index) => {
-    if (!String(svc?.id || '').trim()) {
-      errors.push(`Service ${index + 1}: ID is required`);
-    }
-    if (!String(svc?.title || '').trim()) {
-      errors.push(`Service ${index + 1}: title is required`);
-    }
-    if (svc?.image_url && !isValidUrlOrPath(svc.image_url)) {
-      errors.push(`Service ${index + 1}: image URL must be http(s) or a site path`);
-    }
-  });
-
-  const welcomeImage = form.config_json?.welcome_image_url;
-  if (welcomeImage && !isValidUrlOrPath(welcomeImage)) {
-    errors.push('Welcome image URL must be http(s) or a site path');
-  }
+  const { config_json: _configJson, ...channelFields } = form;
 
   return {
     ok: errors.length === 0,
     errors,
     normalized: {
-      ...form,
+      ...channelFields,
       whatsapp_business_account_id: waba || form.whatsapp_business_account_id,
       phone_number_id: phoneId || form.phone_number_id,
     },

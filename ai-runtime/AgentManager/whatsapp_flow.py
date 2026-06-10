@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 GREETING_KEYWORDS = (
@@ -91,46 +93,17 @@ def parse_channel_config(channel: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
 
-    services = raw.get("services")
-    if not isinstance(services, list) or not services:
-        services = DEFAULT_SSQUARE_SERVICES
-    else:
-        ids = {str(s.get("id", "")).lower() for s in services if isinstance(s, dict)}
-        if "book_visit" not in ids:
-            book_svc = next(
-                (s for s in DEFAULT_SSQUARE_SERVICES if s.get("id") == "book_visit"),
-                None,
-            )
-            if book_svc:
-                services = list(services) + [book_svc]
+    services = raw.get("services") if isinstance(raw.get("services"), list) else []
 
-    welcome_message = (
-        raw.get("welcome_message")
-        or channel.get("welcome_message")
-        or (
-            "Welcome to *S Square Fitness Club*! 🏋️\n\n"
-            "Pune's trusted fitness destination since 2011. "
-            "Our certified trainers are here to help you reach your goals."
-        )
-    )
-
-    service_menu_message = (
-        raw.get("service_menu_message")
-        or "Please select a service below to learn more:"
-    )
-
-    welcome_image_url = raw.get("welcome_image_url") or "/files/ssquare-welcome-team.png"
+    welcome_message = str(raw.get("welcome_message") or channel.get("welcome_message") or "").strip()
+    service_menu_message = str(raw.get("service_menu_message") or "").strip()
+    welcome_image_url = str(raw.get("welcome_image_url") or "").strip()
 
     bca = raw.get("bca_reminder") if isinstance(raw.get("bca_reminder"), dict) else {}
     bca_reminder = {
         "enabled": bool(bca.get("enabled", False)),
         "interval_days": int(bca.get("interval_days") or 45),
-        "message": bca.get("message")
-        or (
-            "Hi! Your *BCA (body composition) check-up* is due. "
-            "Please visit reception for a quick scan — it helps you monitor progress. "
-            "We recommend BCA every 45 days. 💪"
-        ),
+        "message": str(bca.get("message") or "").strip(),
     }
 
     welcome_timing = raw.get("welcome_timing") if isinstance(raw.get("welcome_timing"), dict) else {}
@@ -163,6 +136,23 @@ def resolve_welcome_image_path(image_ref: str) -> str:
         if os.path.isfile(path):
             return path
     return ""
+
+
+def _image_url_reachable(url: str) -> bool:
+    """Meta rejects or silently drops image sends when the link 404s."""
+    link = (url or "").strip()
+    if not link.startswith("http://") and not link.startswith("https://"):
+        return False
+    try:
+        resp = requests.head(link, timeout=6, allow_redirects=True)
+        if resp.status_code == 200:
+            return True
+        if resp.status_code in (403, 405):
+            resp = requests.get(link, timeout=8, stream=True, allow_redirects=True)
+            return resp.status_code == 200
+    except Exception as exc:
+        logger.warning("Welcome image URL not reachable (%s): %s", link, exc)
+    return False
 
 
 def _public_url(relative_or_absolute: str, public_base: str) -> str:
@@ -310,23 +300,30 @@ def send_welcome_flow(
     cfg: Dict[str, Any],
     public_base: str,
     inbound_message_id: str | None = None,
-) -> None:
-    """Send welcome image/text only — no delayed follow-up messages. User replies *menu* for services."""
-    image_url = _public_url(cfg.get("welcome_image_url") or "", public_base)
+) -> bool:
+    """Send welcome text (reliable). Image is optional when a local file or live URL exists."""
+    raw_image_url = _public_url(cfg.get("welcome_image_url") or "", public_base)
+    image_url = raw_image_url if _image_url_reachable(raw_image_url) else ""
     greeting_text = (cfg.get("welcome_message") or "Welcome to S Square Fitness Club!").strip()
     menu_hint = "Reply *menu* anytime to see our services."
+    full_greeting = f"{greeting_text}\n\n{menu_hint}".strip()
 
     if inbound_message_id:
         api.mark_message_read(inbound_message_id)
 
-    # 1) Greeting phase — image with welcome text as caption (no dead ngrok URL needed)
     image_ref = cfg.get("welcome_image_url") or ""
     local_image = resolve_welcome_image_path(image_ref)
     if not local_image:
         local_image = resolve_welcome_image_path("/files/ssquare-welcome-team.png")
-    full_greeting = f"{greeting_text}\n\n{menu_hint}".strip()
+    if raw_image_url and not image_url and not local_image:
+        logger.warning(
+            "Skipping welcome image for %s — URL not reachable: %s",
+            to_phone,
+            raw_image_url,
+        )
+
     image_caption = full_greeting[:1024]
-    image_sent = False
+    delivered = False
 
     if local_image and hasattr(api, "send_image_from_file"):
         img_result = api.send_image_from_file(
@@ -335,42 +332,33 @@ def send_welcome_flow(
             caption=image_caption,
         )
         if img_result.get("status") == "success":
-            image_sent = True
+            delivered = True
         elif image_url:
             logger.warning(
                 "Welcome image upload failed (%s), trying public URL",
                 img_result.get("error"),
             )
             url_result = api.send_image_message(to_phone, image_url, caption=image_caption)
-            image_sent = url_result.get("status") == "success"
+            delivered = url_result.get("status") == "success"
     elif image_url:
         img_result = api.send_image_message(to_phone, image_url, caption=image_caption)
         if img_result.get("status") == "success":
-            image_sent = True
+            delivered = True
         else:
             logger.warning("Welcome image URL failed: %s", img_result.get("error"))
 
-    if not image_sent and greeting_text:
-        body = f"{greeting_text}\n\n{menu_hint}"
-        api.send_whatsapp_message(
+    if not delivered:
+        result = api.send_whatsapp_message(
             to_phone,
-            body,
+            full_greeting,
             inbound_message_id=inbound_message_id,
             typing_seconds=1.0 if inbound_message_id else 0,
         )
-    elif not image_sent and (local_image or image_url):
-        logger.error(
-            "Welcome image could not be delivered to %s (local=%s url=%s)",
-            to_phone,
-            bool(local_image),
-            bool(image_url),
-        )
-        api.send_whatsapp_message(
-            to_phone,
-            f"{greeting_text}\n\n{menu_hint}".strip(),
-            inbound_message_id=inbound_message_id,
-            typing_seconds=1.0 if inbound_message_id else 0,
-        )
+        delivered = result.get("status") == "success"
+
+    if not delivered:
+        logger.error("[WhatsApp] Welcome flow failed to deliver any message to %s", to_phone)
+    return delivered
 
 
 def send_service_menu(

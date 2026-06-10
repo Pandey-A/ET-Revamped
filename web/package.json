@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "build:standalone": "next build && node scripts/sync-standalone-assets.mjs",
+    "build": "next build && node scripts/sync-standalone-assets.mjs",
+    "build:standalone": "npm run build",
     "start": "next start",
     "lint": "eslint"
   },

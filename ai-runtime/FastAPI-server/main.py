@@ -53,9 +53,7 @@ from AgentManager.whatsapp_handler import whatsapp_api, WhatsAppCloudAPI
 from AgentManager.whatsapp_lead_extractor import extract_and_save_lead
 from AgentManager import widget_session_manager as wsm
 from AgentManager import credits_store
-from AgentManager.credits_greetings import greeting_reply
 from AgentManager import whatsapp_flow
-from AgentManager import whatsapp_booking
 from AgentManager import whatsapp_broadcast
 
 TICKETS_DB = "tickets_store.json"
@@ -364,8 +362,6 @@ async def _whatsapp_send_ai_reply(
     if greeting_message and _should_prefix_greeting(session_id, user_text):
         full_response = f"{greeting_message}\n\n{full_response}"
 
-    chat_history_handler.add_message(session_id, "assistant", full_response)
-    mapped_phone_number_id = channel_config.get("phone_number_id")
     if not full_response.strip():
         logging.error("[WhatsApp] Refusing to send empty message for session %s", session_id)
         return
@@ -379,7 +375,9 @@ async def _whatsapp_send_ai_reply(
         if billing_user and charge_type:
             credits_store.refund_user_charge(billing_user, charge_type, 1)
             charge_type = None
-    elif billing_user:
+        return
+    chat_history_handler.add_message(session_id, "assistant", full_response)
+    if billing_user:
         credits_store.record_user_metric(billing_user, "total_successful_replies")
         if charge_type:
             credits_store.log_usage_event(
@@ -458,57 +456,6 @@ async def async_process_whatsapp(
             credits_store.record_user_metric(billing_user, "total_queries_received")
             credits_store.record_user_metric(billing_user, "total_whatsapp_messages")
 
-        wa_cfg = whatsapp_flow.parse_channel_config(channel_config)
-
-        normalized = (text or "").strip().lower()
-        if normalized in ("menu", "services", "help"):
-            whatsapp_flow.send_service_menu(
-                dynamic_api, to_phone, wa_cfg, inbound_message_id
-            )
-            chat_history_handler.add_message(session_id, "assistant", wa_cfg.get("service_menu_message") or "Service menu sent")
-            if billing_user:
-                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
-            return
-
-        if whatsapp_booking.handle_text_message(
-            dynamic_api,
-            to_phone,
-            session_id,
-            text,
-            phone,
-            agent_id or "",
-            inbound_message_id=inbound_message_id,
-        ):
-            chat_history_handler.add_message(session_id, "assistant", "[booking flow]")
-            return
-
-        service_pick = whatsapp_flow.match_service_from_text(text, wa_cfg.get("services") or [])
-        if service_pick and str(service_pick.get("id", "")).lower() == whatsapp_booking.BOOK_VISIT_ID:
-            whatsapp_booking.start_booking(
-                dynamic_api, to_phone, session_id, inbound_message_id=inbound_message_id
-            )
-            chat_history_handler.add_message(session_id, "assistant", "[booking started]")
-            return
-
-        if whatsapp_flow.is_greeting_message(text):
-            whatsapp_flow.send_welcome_flow(
-                dynamic_api, to_phone, wa_cfg, PUBLIC_BASE_URL, inbound_message_id
-            )
-            chat_history_handler.add_message(session_id, "assistant", wa_cfg.get("welcome_message") or "Welcome")
-            if billing_user:
-                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
-            return
-
-        canned_greeting = greeting_reply(text)
-        if canned_greeting:
-            if billing_user:
-                credits_store.record_user_metric(billing_user, "total_greetings_bypassed")
-            chat_history_handler.add_message(session_id, "assistant", canned_greeting)
-            dynamic_api.send_whatsapp_message(
-                to_phone, canned_greeting, inbound_message_id=inbound_message_id
-            )
-            return
-
         await _whatsapp_send_ai_reply(
             session_id=session_id,
             to_phone=to_phone,
@@ -553,45 +500,7 @@ async def async_process_whatsapp_interactive(
 
         billing_user = _billing_user_for_agent(agent_id)
 
-        if whatsapp_booking.is_booking_selection(selection_id):
-            whatsapp_booking.handle_selection(
-                dynamic_api,
-                to_phone,
-                session_id,
-                selection_id,
-                phone,
-                agent_id,
-                inbound_message_id=inbound_message_id,
-            )
-            return
-
-        wa_cfg = whatsapp_flow.parse_channel_config(channel_config)
-        services = wa_cfg.get("services") or []
-        service = whatsapp_flow.resolve_service_selection(
-            services, selection_id, selection_title
-        )
-        if not service:
-            dynamic_api.send_whatsapp_message(
-                to_phone,
-                "Sorry, I didn't recognize that option. Reply *menu* to see services again.",
-                inbound_message_id=inbound_message_id,
-            )
-            return
-
-        if str(service.get("id", "")).lower() == whatsapp_booking.BOOK_VISIT_ID:
-            whatsapp_booking.start_booking(
-                dynamic_api, to_phone, session_id, inbound_message_id=inbound_message_id
-            )
-            return
-
-        user_message = whatsapp_flow.service_as_user_message(
-            service, selection_title=selection_title
-        )
-        logging.info(
-            "[WhatsApp] Service menu → AI | id=%s | user_message=%s",
-            selection_id,
-            user_message,
-        )
+        user_message = (selection_title or selection_id or "Selected option").strip()
         chat_history_handler.add_message(session_id, "user", user_message)
         await _whatsapp_send_ai_reply(
             session_id=session_id,
@@ -604,8 +513,6 @@ async def async_process_whatsapp_interactive(
             channel_config=channel_config,
             billing_user=billing_user,
         )
-        if str(service.get("id", "")).lower() == "bca":
-            whatsapp_flow.record_bca_completed(phone)
     except Exception as e:
         logging.error(f"Failed in async_process_whatsapp_interactive: {e}")
 
@@ -767,15 +674,16 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
 
                             if msg_type == "text":
                                 text = msg["text"]["body"]
-                                background_tasks.add_task(
-                                    async_process_whatsapp,
-                                    session_id,
-                                    phone,
-                                    text,
-                                    waba_id,
-                                    phone_number_id,
-                                    display_phone_number,
-                                    msg.get("id"),
+                                asyncio.create_task(
+                                    async_process_whatsapp(
+                                        session_id,
+                                        phone,
+                                        text,
+                                        waba_id,
+                                        phone_number_id,
+                                        display_phone_number,
+                                        msg.get("id"),
+                                    )
                                 )
                             elif msg_type == "interactive":
                                 interactive = msg.get("interactive") or {}
@@ -790,15 +698,16 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
                                     selection_id = btn.get("id")
                                     selection_title = btn.get("title")
                                 if selection_id:
-                                    background_tasks.add_task(
-                                        async_process_whatsapp_interactive,
-                                        session_id,
-                                        phone,
-                                        selection_id,
-                                        waba_id,
-                                        phone_number_id,
-                                        msg.get("id"),
-                                        selection_title,
+                                    asyncio.create_task(
+                                        async_process_whatsapp_interactive(
+                                            session_id,
+                                            phone,
+                                            selection_id,
+                                            waba_id,
+                                            phone_number_id,
+                                            msg.get("id"),
+                                            selection_title,
+                                        )
                                     )
                             else:
                                 msg_type = msg.get("type") or "unknown"

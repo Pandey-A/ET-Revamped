@@ -12,13 +12,24 @@ const FASTAPI_BASE = (process.env.FASTAPI_AGENT_SYNC_URL || process.env.AI_AGENT
   .trim()
   .replace(/\/$/, '');
 
-const BEDROCK_DEFAULT_MODEL =
-  (process.env.BEDROCK_DEFAULT_MODEL || 'meta.llama3-8b-instruct-v1:0').trim();
+const OPENAI_DEFAULT_MODEL =
+  (process.env.OPENAI_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
 
 function resolveRuntimeModel(model) {
   const m = (model || '').trim();
-  if (m.includes('.')) return m;
-  return BEDROCK_DEFAULT_MODEL;
+  if (!m) return OPENAI_DEFAULT_MODEL;
+  const lower = m.toLowerCase();
+  if (
+    lower.startsWith('gpt-') ||
+    lower.startsWith('o1') ||
+    lower.startsWith('o3') ||
+    lower.startsWith('o4') ||
+    lower.startsWith('chatgpt-')
+  ) {
+    return m;
+  }
+  if (m.includes('.')) return OPENAI_DEFAULT_MODEL;
+  return m || OPENAI_DEFAULT_MODEL;
 }
 
 function toIso(v) {

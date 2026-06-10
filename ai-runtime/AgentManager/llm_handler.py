@@ -40,10 +40,22 @@ def get_openai_embedding_model() -> str:
     ).strip()
 
 
+def _looks_like_openai_model(model: str) -> bool:
+    m = (model or "").strip().lower()
+    if not m:
+        return False
+    return m.startswith(
+        ("gpt-", "o1", "o3", "o4", "text-", "chatgpt-", "davinci", "ada", "babbage", "curie")
+    )
+
+
 def resolve_openai_model(model: str | None = None) -> str:
     candidate = (model or "").strip()
-    if candidate:
+    if candidate and _looks_like_openai_model(candidate):
         return candidate
+    if candidate:
+        # Old agents may still have Bedrock ids (meta.llama3-8b-instruct-v1:0, etc.)
+        return get_openai_config()["model"]
     return get_openai_config()["model"]
 
 

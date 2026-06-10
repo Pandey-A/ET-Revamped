@@ -7,62 +7,11 @@ import Footer from "@/components/Footer";
 import { ToastContainer, toast } from "react-toastify";
 import { motion, AnimatePresence } from "framer-motion";
 import "react-toastify/dist/ReactToastify.css";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, fetchMyAgents } from "@/lib/api";
 import { getAuthHeaderObject } from "@/lib/authToken";
 import { formatApiValidationError, validateWhatsAppChannelForm } from "@/lib/validation/forms";
 
 const API_BASE = getApiBaseUrl();
-
-const DEFAULT_SSQUARE_CONFIG = {
-  welcome_message:
-    "Welcome to *S Square Fitness Club*! 🏋️\n\nPune's trusted fitness destination since 2011. Our certified trainers help you reach your goals.",
-  service_menu_message: "Please select a service below to explore what we offer:",
-  welcome_image_url: "/files/ssquare-welcome-team.png",
-  welcome_timing: {
-    after_image_sec: 0,
-    after_greeting_sec: 0,
-    menu_typing_sec: 0,
-  },
-  services: [
-    {
-      id: "membership",
-      title: "Membership Plans",
-      description:
-        "Monthly ₹3,200 | 3 Months ₹7,500 | 6 Months ₹9,500 | Yearly ₹16,500. Weight training, yoga, zumba, cardio, aerobics & crossfit.",
-      image_url: "",
-    },
-    {
-      id: "facilities",
-      title: "Facilities & Amenities",
-      description: "7500 sq ft club in Pimple Saudagar with modern equipment and group classes.",
-      image_url: "",
-    },
-    {
-      id: "bca",
-      title: "BCA Body Check-up",
-      description: "Track progress with BCA at reception — recommended every 45 days.",
-      image_url: "",
-    },
-    {
-      id: "contact",
-      title: "Visit & Contact",
-      description: "Kokane Height, Rahatani Chowk, Pimple Saudagar. Call 744 744 6787.",
-      image_url: "",
-    },
-    {
-      id: "book_visit",
-      title: "Book a Gym Visit",
-      description: "Schedule a 30-minute visit. Pick a time slot and confirm with your name.",
-      image_url: "",
-    },
-  ],
-  bca_reminder: {
-    enabled: false,
-    interval_days: 45,
-    message:
-      "Hi! Your *BCA check-up* is due. Please visit reception for a quick scan — it helps you monitor progress. We recommend BCA every 45 days. 💪",
-  },
-};
 
 async function syncAgentToRuntime(agentId) {
   if (!agentId) return;
@@ -92,9 +41,7 @@ function EmptyChannels() {
 }
 
 const DEFAULT_BROADCAST_TEMPLATE =
-  "Hello {User},\n\n" +
-  "We have an update from *S Square Fitness Club* for you.\n\n" +
-  "Reply *menu* anytime to explore our services.";
+  "Hello {User},\n\nWe have an update for you.\n\nReply here if you have any questions.";
 
 function previewBroadcastMessage(template, sampleName = "Rahul") {
   const name = (sampleName || "").trim() || "there";
@@ -281,8 +228,7 @@ function BroadcastModal({ open, onClose, channel }) {
           <h3 className="modal-title">Send broadcast</h3>
           <p className="modal-subtext">
             {channel.display_phone_number || channel.phone_number_id} — messages go only to numbers
-            you list or saved leads. A fixed BCA promo image is attached on every broadcast.
-            WhatsApp may block messages outside the 24-hour window unless you use an approved template.
+            you list or saved leads. WhatsApp may block messages outside the 24-hour window unless you use an approved template.
           </p>
 
           <div className="aia-form-group">
@@ -433,14 +379,10 @@ function BroadcastModal({ open, onClose, channel }) {
 }
 
 function ChannelCard({ channel, onEdit, onDelete, onBroadcast }) {
+  if (!channel?.id) return null;
+
   return (
-    <motion.div
-      className="aia-card"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      layout
-    >
+    <div className="aia-card">
       <div className="aia-card-header">
         <div className="aia-avatar">WA</div>
         <div className="aia-card-meta">
@@ -475,7 +417,7 @@ function ChannelCard({ channel, onEdit, onDelete, onBroadcast }) {
           Delete
         </button>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -488,10 +430,8 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
     ai_agent_id: "",
     ai_agent_name: "",
     admin_phone: "",
-    config_json: DEFAULT_SSQUARE_CONFIG,
   });
   const [saving, setSaving] = useState(false);
-  const [uploadingWelcome, setUploadingWelcome] = useState(false);
 
   useEffect(() => {
     if (channel) {
@@ -503,10 +443,6 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
         ai_agent_id: channel.ai_agent_id || "",
         ai_agent_name: channel.ai_agent_name || "",
         admin_phone: channel.admin_phone || "",
-        config_json: {
-          ...DEFAULT_SSQUARE_CONFIG,
-          ...(channel.config_json && typeof channel.config_json === "object" ? channel.config_json : {}),
-        },
       });
     } else {
       setForm({
@@ -517,76 +453,9 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
         ai_agent_id: "",
         ai_agent_name: "",
         admin_phone: "",
-        config_json: DEFAULT_SSQUARE_CONFIG,
       });
     }
   }, [channel, open]);
-
-  const updateConfig = (patch) => {
-    setForm((prev) => ({
-      ...prev,
-      config_json: { ...prev.config_json, ...patch },
-    }));
-  };
-
-  const updateService = (index, field, value) => {
-    setForm((prev) => {
-      const services = [...(prev.config_json?.services || [])];
-      services[index] = { ...services[index], [field]: value };
-      return { ...prev, config_json: { ...prev.config_json, services } };
-    });
-  };
-
-  const addServiceRow = () => {
-    setForm((prev) => ({
-      ...prev,
-      config_json: {
-        ...prev.config_json,
-        services: [
-          ...(prev.config_json?.services || []),
-          { id: `service_${Date.now()}`, title: "New Service", description: "", image_url: "" },
-        ],
-      },
-    }));
-  };
-
-  const uploadWelcomeImage = async (file) => {
-    if (!file) return;
-    setUploadingWelcome(true);
-    try {
-      const body = new FormData();
-      body.append("file", file);
-      const res = await fetch(`${API_BASE}/upload/logo`, {
-        method: "POST",
-        credentials: "include",
-        headers: { ...getAuthHeaderObject() },
-        body,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || "Upload failed");
-      updateConfig({ welcome_image_url: data.url });
-      toast.success("Welcome image uploaded.");
-    } catch (err) {
-      toast.error(err.message || "Image upload failed");
-    } finally {
-      setUploadingWelcome(false);
-    }
-  };
-
-  const runBcaTest = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/whatsapp-channels/bca-reminders/test?force=1`, {
-        method: "POST",
-        credentials: "include",
-        headers: { ...getAuthHeaderObject() },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.detail || "BCA test failed");
-      toast.success(`BCA reminders sent: ${data.sent ?? 0}`);
-    } catch (err) {
-      toast.error(err.message || "Could not run BCA test");
-    }
-  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -645,24 +514,13 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
   };
 
   if (!open) return null;
+
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="modal-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-        >
-          <motion.div
-            className="modal-container aia-create-modal"
-            initial={{ scale: 0.92, opacity: 0, y: 20 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            exit={{ scale: 0.92, opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            onClick={(e) => e.stopPropagation()}
-          >
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-container aia-create-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
             <div className="aia-modal-header">
               <h2>{channel ? "Edit WhatsApp Channel" : "Create WhatsApp Channel"}</h2>
               <button className="aia-modal-close" onClick={onClose}>✕</button>
@@ -712,116 +570,14 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
                     </option>
                   ))}
                 </select>
+                <small className="aia-form-hint">
+                  WhatsApp replies are generated by this agent using its knowledge base and LLM — no separate greeting or menu setup needed.
+                </small>
               </div>
 
               <div className="aia-form-group">
                 <label>Admin Phone</label>
                 <input name="admin_phone" value={form.admin_phone} onChange={handleChange} />
-              </div>
-
-              <hr style={{ margin: "1.25rem 0", opacity: 0.2 }} />
-              <h3 style={{ marginBottom: "0.75rem" }}>WhatsApp welcome & menu</h3>
-
-              <div className="aia-form-group">
-                <label>Welcome message</label>
-                <textarea
-                  rows={4}
-                  value={form.config_json?.welcome_message || ""}
-                  onChange={(e) => updateConfig({ welcome_message: e.target.value })}
-                />
-              </div>
-
-              <div className="aia-form-group">
-                <label>Service menu message (sent after greeting)</label>
-                <textarea
-                  rows={2}
-                  value={form.config_json?.service_menu_message || ""}
-                  onChange={(e) => updateConfig({ service_menu_message: e.target.value })}
-                  placeholder="Please select a service below..."
-                />
-              </div>
-
-              <div className="aia-form-group">
-                <label>Welcome image URL</label>
-                <input
-                  value={form.config_json?.welcome_image_url || ""}
-                  onChange={(e) => updateConfig({ welcome_image_url: e.target.value })}
-                  placeholder="/files/ssquare-welcome-team.png"
-                />
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => uploadWelcomeImage(e.target.files?.[0])}
-                  disabled={uploadingWelcome}
-                />
-                <small className="aia-form-hint">
-                  For Meta delivery, set PUBLIC_BASE_URL on FastAPI to your ngrok HTTPS URL so images are publicly reachable.
-                </small>
-              </div>
-
-              <div className="aia-form-group">
-                <label>Service menu</label>
-                {(form.config_json?.services || []).map((svc, idx) => (
-                  <div key={svc.id || idx} style={{ marginBottom: "0.75rem", padding: "0.75rem", border: "1px solid #eee", borderRadius: 8 }}>
-                    <input
-                      placeholder="Service ID"
-                      value={svc.id || ""}
-                      onChange={(e) => updateService(idx, "id", e.target.value)}
-                      style={{ marginBottom: 6, width: "100%" }}
-                    />
-                    <input
-                      placeholder="Title"
-                      value={svc.title || ""}
-                      onChange={(e) => updateService(idx, "title", e.target.value)}
-                      style={{ marginBottom: 6, width: "100%" }}
-                    />
-                    <textarea
-                      placeholder="Description"
-                      rows={2}
-                      value={svc.description || ""}
-                      onChange={(e) => updateService(idx, "description", e.target.value)}
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-                <button type="button" className="aia-btn aia-btn--secondary" onClick={addServiceRow}>
-                  + Add service
-                </button>
-              </div>
-
-              <div className="aia-form-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.config_json?.bca_reminder?.enabled)}
-                    onChange={(e) =>
-                      updateConfig({
-                        bca_reminder: {
-                          ...(form.config_json?.bca_reminder || {}),
-                          enabled: e.target.checked,
-                        },
-                      })
-                    }
-                  />{" "}
-                  BCA reminder (every {form.config_json?.bca_reminder?.interval_days || 45} days)
-                </label>
-                <textarea
-                  rows={3}
-                  value={form.config_json?.bca_reminder?.message || ""}
-                  onChange={(e) =>
-                    updateConfig({
-                      bca_reminder: {
-                        ...(form.config_json?.bca_reminder || {}),
-                        message: e.target.value,
-                      },
-                    })
-                  }
-                />
-                {channel?.id && (
-                  <button type="button" className="aia-btn aia-btn--secondary" onClick={runBcaTest} style={{ marginTop: 8 }}>
-                    Send BCA test broadcast (local)
-                  </button>
-                )}
               </div>
 
               <div className="modal-actions">
@@ -831,10 +587,8 @@ function ChannelModal({ open, onClose, onSaved, channel, agents }) {
                 </button>
               </div>
             </form>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      </div>
+    </div>
   );
 }
 
@@ -855,22 +609,27 @@ export default function WhatsAppChannelsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [channelsRes, agentsRes] = await Promise.all([
+      const [channelsRes, agentsList] = await Promise.all([
         fetch(`${API_BASE}/whatsapp-channels`, {
           credentials: "include",
           headers: { ...getAuthHeaderObject() },
         }),
-        fetch(`${API_BASE}/agents`, {
-          credentials: "include",
-          headers: { ...getAuthHeaderObject() },
-        }),
+        fetchMyAgents(),
       ]);
 
-      const channelsData = channelsRes.ok ? await channelsRes.json() : { channels: [] };
-      const agentsData = agentsRes.ok ? await agentsRes.json() : [];
-      setChannels(Array.isArray(channelsData?.channels) ? channelsData.channels : []);
-      setAgents(Array.isArray(agentsData) ? agentsData : []);
+      if (channelsRes.ok) {
+        const channelsData = await channelsRes.json();
+        const list = Array.isArray(channelsData?.channels) ? channelsData.channels : [];
+        setChannels(list.filter((c) => c && c.id));
+      } else {
+        setChannels([]);
+        toast.error("Failed to load WhatsApp channels.");
+      }
+
+      setAgents(Array.isArray(agentsList) ? agentsList : []);
     } catch {
+      setChannels([]);
+      setAgents([]);
       toast.error("Failed to load WhatsApp channels.");
     } finally {
       setLoading(false);
@@ -882,6 +641,10 @@ export default function WhatsAppChannelsPage() {
   }, [loadData]);
 
   const handleSaved = (savedChannel, isEdit) => {
+    if (!savedChannel?.id) {
+      loadData();
+      return;
+    }
     if (isEdit) {
       setChannels((prev) => prev.map((c) => (c.id === savedChannel.id ? savedChannel : c)));
       return;
@@ -955,20 +718,18 @@ export default function WhatsAppChannelsPage() {
           <EmptyChannels />
         ) : (
           <div className="aia-grid">
-            <AnimatePresence>
-              {channels.map((channel) => (
-                <ChannelCard
-                  key={channel.id}
-                  channel={channel}
-                  onEdit={(target) => {
-                    setEditingChannel(target);
-                    setModalOpen(true);
-                  }}
-                  onDelete={setDeleteTarget}
-                  onBroadcast={setBroadcastChannel}
-                />
-              ))}
-            </AnimatePresence>
+            {channels.map((channel) => (
+              <ChannelCard
+                key={channel.id}
+                channel={channel}
+                onEdit={(target) => {
+                  setEditingChannel(target);
+                  setModalOpen(true);
+                }}
+                onDelete={setDeleteTarget}
+                onBroadcast={setBroadcastChannel}
+              />
+            ))}
           </div>
         )}
       </main>
